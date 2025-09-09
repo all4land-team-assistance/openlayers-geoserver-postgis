@@ -1,0 +1,57 @@
+version: "3.8"
+
+services:
+  postgis:
+    image: kartoza/postgis:14-3.2
+    container_name: postgis
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - ALLOW_IP_RANGE=0.0.0.0/0
+      - POSTGRES_MULTIPLE_EXTENSIONS=postgis,hstore,postgis_topology,postgis_raster,pgrouting
+    ports:
+      - "${POSTGIS_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sample-data:/sample-data
+    networks:
+      - geoserver-network
+
+  geoserver:
+    image: kartoza/geoserver:2.23.0
+    container_name: geoserver
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - GEOSERVER_DATA_DIR=/opt/geoserver/data_dir
+      - ENABLE_JSONP=true
+      - MAX_FILTER_RULES=20
+      - OPTIMIZE_LINE_WIDTH=false
+      - FOOTPRINTS_DATA_DIR=/opt/footprints_dir
+      - GEOWEBCACHE_CACHE_DIR=/opt/geoserver/data_dir/gwc
+      - GEOSERVER_FILEBROWSER_HIDEFS=false
+      - STABLE_EXTENSIONS=wps-extension,csw-extension
+      - COMMUNITY_EXTENSIONS=
+      - CORS_ENABLED=true
+      - CORS_ALLOWED_ORIGINS=*
+      - CORS_ALLOWED_METHODS=GET,POST,PUT,HEAD,OPTIONS
+      - CORS_ALLOWED_HEADERS=*
+    ports:
+      - "${GEOSERVER_PORT:-8080}:8080"
+    volumes:
+      - geoserver_data:/opt/geoserver/data_dir
+      - ./sample-data:/sample-data
+    depends_on:
+      - postgis
+    networks:
+      - geoserver-network
+
+volumes:
+  postgres_data:
+  geoserver_data:
+
+networks:
+  geoserver-network:
+    driver: bridge

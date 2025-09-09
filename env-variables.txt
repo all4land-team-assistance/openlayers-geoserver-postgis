@@ -1,0 +1,20 @@
+# 이 파일을 .env로 복사해서 사용하세요
+# cp env-variables.txt .env
+
+# PostgreSQL/PostGIS 설정
+POSTGRES_DB=geoserver_db
+POSTGRES_USER=geoserver
+POSTGRES_PASS=geoserver123!
+POSTGRES_HOST=postgis
+POSTGRES_PORT=5432
+
+# GeoServer 설정
+GEOSERVER_ADMIN_PASSWORD=geoserver123!
+GEOSERVER_ADMIN_USER=admin
+
+# 네트워크 포트
+POSTGIS_PORT=5432
+GEOSERVER_PORT=8080
+
+# 시간대
+TZ=Asia/Seoul
