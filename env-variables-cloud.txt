@@ -1,0 +1,19 @@
+# Google Cloud SQL 연결용 환경변수
+# cp env-variables-cloud.txt .env
+
+# Google Cloud SQL PostgreSQL/PostGIS 설정
+POSTGRES_DB=your_database_name          # Cloud SQL 데이터베이스명
+POSTGRES_USER=your_username             # Cloud SQL 사용자명
+POSTGRES_PASS=your_password             # Cloud SQL 비밀번호
+POSTGRES_HOST=your-instance-ip          # Cloud SQL 퍼블릭 IP 또는 연결 이름
+POSTGRES_PORT=5432
+
+# GeoServer 설정
+GEOSERVER_ADMIN_PASSWORD=geoserver123!
+GEOSERVER_ADMIN_USER=admin
+
+# 네트워크 포트 (로컬에서만 사용)
+GEOSERVER_PORT=8080
+
+# 시간대
+TZ=Asia/Seoul
