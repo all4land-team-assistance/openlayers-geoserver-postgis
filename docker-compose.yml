@@ -14,7 +14,7 @@ services:
       - "${POSTGIS_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./sample-data:/sample-data
+      - ./Data:/Data
     networks:
       - geoserver-network
 
@@ -42,7 +42,7 @@ services:
       - "${GEOSERVER_PORT:-8080}:8080"
     volumes:
       - geoserver_data:/opt/geoserver/data_dir
-      - ./sample-data:/sample-data
+      - ./Data:/Data
     depends_on:
       - postgis
     networks:
