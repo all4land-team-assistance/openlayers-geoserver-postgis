@@ -2,8 +2,8 @@
  * 메인 지도 컴포넌트
  * OpenLayers를 사용하여 한국 행정구역 지도를 표시하고 호버 효과를 제공
  */
-import React, { useEffect, useRef } from "react";
-import Map from "ol/Map";
+import React, { useEffect, useRef, useState } from "react";
+import OLMap from "ol/Map";
 import View from "ol/View";
 import TileLayer from "ol/layer/Tile";
 import VectorLayer from "ol/layer/Vector";
@@ -13,172 +13,216 @@ import { fromLonLat } from "ol/proj";
 import GeoJSON from "ol/format/GeoJSON";
 import { Style, Fill, Stroke } from "ol/style";
 import { defaults as defaultControls } from "ol/control";
-import MapLegend from "./MapLegend";
-import MapInstructions from "./MapInstructions";
-import {
-  GEOSERVER_URL,
-  WORKSPACE,
-  REGION_CONFIGS,
-  STYLES,
-} from "../config/constants";
+import SearchPanel from "./SearchPanel";
+import MapControls from "./MapControls";
+import LayerPanel from "./LayerPanel";
+import { GEOSERVER_URL, WORKSPACE, STYLES } from "../config/constants";
+import { useMap } from "../hooks/useMap";
+import { useLayers } from "../hooks/useLayers";
+import type { LayerInfo } from "../types";
+
+// LayerInfo 타입을 컴포넌트에 export
+export type { LayerInfo };
 
 const MapComponent: React.FC = () => {
   const mapRef = useRef<HTMLDivElement>(null);
-  const mapInstanceRef = useRef<Map | null>(null);
-  const highlightedFeatureRef = useRef<any>(null); // 현재 하이라이트된 피처 추적
+  const { mapInstanceRef, highlightedFeatureRef, handleZoomIn, handleZoomOut } = useMap();
+  const { layersMapRef } = useLayers();
+
+  // 레이어 패널 상태
+  const [isLayerPanelOpen, setIsLayerPanelOpen] = useState(false);
+  const [availableLayers, setAvailableLayers] = useState<LayerInfo[]>([]);
+  const [visibleLayers, setVisibleLayers] = useState<Set<string>>(new Set());
+
+  // 레이어 패널 토글 핸들러
+  const handleToggleLayerPanel = () => {
+    setIsLayerPanelOpen(!isLayerPanelOpen);
+  };
+
+  // 레이어 표시/숨김 토글 핸들러
+  const handleToggleLayer = (layerName: string) => {
+    const layer = layersMapRef.current.get(layerName);
+    if (layer) {
+      const newVisibleLayers = new Set(visibleLayers);
+      if (visibleLayers.has(layerName)) {
+        newVisibleLayers.delete(layerName);
+        layer.setVisible(false);
+      } else {
+        newVisibleLayers.add(layerName);
+        layer.setVisible(true);
+      }
+      setVisibleLayers(newVisibleLayers);
+    }
+  };
+
+  // GeoServer에서 레이어 목록을 동적으로 가져오는 함수
+  const fetchLayersFromGeoServer = async () => {
+    try {
+      const response = await fetch(
+        `${GEOSERVER_URL}/wfs?service=WFS&version=1.1.0&request=GetCapabilities`
+      );
+      const text = await response.text();
+      const parser = new DOMParser();
+      const xml = parser.parseFromString(text, "text/xml");
+
+      // FeatureType 목록 추출
+      const featureTypes = xml.getElementsByTagName("FeatureType");
+      const layers: LayerInfo[] = [];
+
+      for (let i = 0; i < featureTypes.length; i++) {
+        const nameElement = featureTypes[i].getElementsByTagName("Name")[0];
+        const titleElement = featureTypes[i].getElementsByTagName("Title")[0];
+
+        if (nameElement && titleElement) {
+          const fullName = nameElement.textContent || "";
+          const title = titleElement.textContent || "";
+
+          // workspace:layername 형식에서 layername만 추출
+          const layerName = fullName.includes(":")
+            ? fullName.split(":")[1]
+            : fullName;
+
+          layers.push({
+            name: layerName,
+            displayName: title || layerName,
+            color: "rgba(100, 149, 237, 0.3)",
+          });
+        }
+      }
+
+      return layers;
+    } catch (error) {
+      console.error("GeoServer 레이어 목록 로딩 실패:", error);
+      return [];
+    }
+  };
 
   useEffect(() => {
     if (!mapRef.current) return;
 
-    // 기본 배경 지도 레이어 (OpenStreetMap)
-    const osmLayer = new TileLayer({
-      source: new OSM(),
-    });
+    const initMap = async () => {
+      // 기본 배경 지도 레이어 (OpenStreetMap)
+      const osmLayer = new TileLayer({
+        source: new OSM(),
+      });
 
-    // 서울 행정구역 벡터 레이어 (WFS를 통해 GeoServer에서 데이터 로드)
-    const seoulVectorSource = new VectorSource({
-      url: `${GEOSERVER_URL}/wfs?service=WFS&version=1.1.0&request=GetFeature&typename=${WORKSPACE}:seoul_districts&outputFormat=application/json`,
-      format: new GeoJSON(),
-    });
+      // GeoServer에서 레이어 목록 가져오기
+      const layers = await fetchLayersFromGeoServer();
 
-    const seoulVectorLayer = new VectorLayer({
-      source: seoulVectorSource,
-      style: new Style({
-        fill: new Fill({ color: REGION_CONFIGS.seoul.color.fill }),
-        stroke: new Stroke({
-          color: REGION_CONFIGS.seoul.color.stroke,
-          width: 2,
-        }),
-      }),
-    });
+      if (layers.length === 0) {
+        console.warn(
+          "GeoServer에서 레이어를 찾을 수 없습니다. 배경 지도만 표시합니다."
+        );
+      }
 
-    // 인천 행정구역 벡터 레이어
-    const incheonVectorSource = new VectorSource({
-      url: `${GEOSERVER_URL}/wfs?service=WFS&version=1.1.0&request=GetFeature&typename=${WORKSPACE}:incheon_districts&outputFormat=application/json`,
-      format: new GeoJSON(),
-    });
+      // 동적으로 벡터 레이어 생성
+      const vectorLayers: VectorLayer<VectorSource>[] = [];
 
-    const incheonVectorLayer = new VectorLayer({
-      source: incheonVectorSource,
-      style: new Style({
-        fill: new Fill({ color: REGION_CONFIGS.incheon.color.fill }),
-        stroke: new Stroke({
-          color: REGION_CONFIGS.incheon.color.stroke,
-          width: 2,
-        }),
-      }),
-    });
+      if (layers.length > 0) {
+        layers.forEach((layerInfo) => {
+          const vectorSource = new VectorSource({
+            url: `${GEOSERVER_URL}/wfs?service=WFS&version=1.1.0&request=GetFeature&typename=${WORKSPACE}:${layerInfo.name}&outputFormat=application/json`,
+            format: new GeoJSON(),
+          });
 
-    // 경기도 행정구역 벡터 레이어
-    const gyeonggiVectorSource = new VectorSource({
-      url: `${GEOSERVER_URL}/wfs?service=WFS&version=1.1.0&request=GetFeature&typename=${WORKSPACE}:gyeonggi_districts&outputFormat=application/json`,
-      format: new GeoJSON(),
-    });
-
-    const gyeonggiVectorLayer = new VectorLayer({
-      source: gyeonggiVectorSource,
-      style: new Style({
-        fill: new Fill({ color: REGION_CONFIGS.gyeonggi.color.fill }),
-        stroke: new Stroke({
-          color: REGION_CONFIGS.gyeonggi.color.stroke,
-          width: 2,
-        }),
-      }),
-    });
-
-    // OpenLayers 지도 인스턴스 생성 및 설정
-    const map = new Map({
-      target: mapRef.current,
-      layers: [
-        osmLayer, // 배경 지도 (OpenStreetMap)
-        gyeonggiVectorLayer, // 경기도 (파란색)
-        incheonVectorLayer, // 인천 (초록색)
-        seoulVectorLayer, // 서울 (빨간색)
-      ],
-      view: new View({
-        center: fromLonLat([126.978, 37.5665]), // 서울 중심 좌표로 변환
-        zoom: 8, // 초기 줌 레벨
-      }),
-      controls: defaultControls({
-        attribution: false, // 저작권 표시 제거
-        zoom: true, // 줌 컨트롤 유지
-        fullScreen: false, // 전체화면 버튼 제거
-        rotate: false, // 회전 컨트롤 제거
-        mouseWheelZoom: true, // 마우스 휠 줌 허용
-      }),
-    });
-
-    mapInstanceRef.current = map;
-
-    // 마우스 호버 이벤트 핸들러 - 행정구역에 마우스를 올리면 하이라이트
-    const handlePointerMove = (event: any) => {
-      const features = map.getFeaturesAtPixel(event.pixel);
-
-      if (features.length > 0) {
-        const feature = features[0]; // 첫 번째 피처 선택
-
-        // 이전에 하이라이트된 피처가 다르다면 원래 스타일로 복원
-        if (
-          highlightedFeatureRef.current &&
-          highlightedFeatureRef.current !== feature
-        ) {
-          highlightedFeatureRef.current.setStyle(undefined);
-        }
-
-        // 현재 피처가 이전과 다르다면 하이라이트 스타일 적용
-        if (highlightedFeatureRef.current !== feature) {
-          const highlightStyle = new Style({
-            fill: new Fill({ color: STYLES.highlight.fill }),
-            stroke: new Stroke({
-              color: STYLES.highlight.stroke,
-              width: STYLES.highlight.strokeWidth,
+          const vectorLayer = new VectorLayer({
+            source: vectorSource,
+            style: new Style({
+              fill: new Fill({ color: layerInfo.color }),
+              stroke: new Stroke({
+                color: "#4169E1",
+                width: 1.5,
+              }),
             }),
           });
-          feature.setStyle(highlightStyle);
-          highlightedFeatureRef.current = feature;
 
-          console.log("호버된 피처:", feature.getProperties()); // 디버깅용 로그
-        }
-      } else {
-        // 피처가 없으면 하이라이트 제거
-        if (highlightedFeatureRef.current) {
-          highlightedFeatureRef.current.setStyle(undefined);
-          highlightedFeatureRef.current = null;
-        }
-      }
-    };
+          layersMapRef.current.set(layerInfo.name, vectorLayer);
+          vectorLayers.push(vectorLayer);
 
-    // 마우스 이동 이벤트 리스너 등록
-    map.on("pointermove", handlePointerMove);
-
-    // 각 레이어 데이터 로딩 완료 이벤트 (디버깅용)
-    seoulVectorSource.on("featuresloadend", () => {
-      console.log("서울 데이터 로딩 완료");
-    });
-
-    incheonVectorSource.on("featuresloadend", () => {
-      console.log("인천 데이터 로딩 완료");
-    });
-
-    gyeonggiVectorSource.on("featuresloadend", () => {
-      console.log("경기도 데이터 로딩 완료");
-    });
-
-    // 에러 핸들링
-    [seoulVectorSource, incheonVectorSource, gyeonggiVectorSource].forEach(
-      (source) => {
-        source.on("featuresloaderror", (event) => {
-          console.error("GeoServer 데이터 로딩 실패:", event);
+          // 에러 핸들링
+          vectorSource.on("featuresloaderror", (event) => {
+            console.error(`${layerInfo.displayName} 데이터 로딩 실패:`, event);
+          });
         });
       }
-    );
 
-    // 클린업
-    return () => {
-      if (mapInstanceRef.current) {
-        mapInstanceRef.current.setTarget(undefined);
-      }
+      // OpenLayers 지도 인스턴스 생성 및 설정
+      const map = new OLMap({
+        target: mapRef.current!,
+        layers: [osmLayer, ...vectorLayers],
+        view: new View({
+          center: fromLonLat([126.978, 37.5665]), // 서울 중심 좌표로 변환
+          zoom: 8, // 초기 줌 레벨
+        }),
+        controls: defaultControls({
+          attribution: false, // 저작권 표시 제거
+          zoom: false, // 줌 컨트롤 제거 (나중에 커스텀으로 추가 예정)
+          rotate: false, // 회전 컨트롤 제거
+        }),
+      });
+
+      mapInstanceRef.current = map;
+
+      // 레이어 목록 및 가시성 상태 초기화
+      setAvailableLayers(layers);
+      setVisibleLayers(new Set(layers.map((l) => l.name)));
+
+      // 마우스 호버 이벤트 핸들러 - 행정구역에 마우스를 올리면 하이라이트
+      const handlePointerMove = (event: { pixel: number[] }) => {
+        const features = map.getFeaturesAtPixel(event.pixel);
+
+        if (features.length > 0) {
+          const feature = features[0]; // 첫 번째 피처 선택
+
+          // 이전에 하이라이트된 피처가 다르다면 원래 스타일로 복원
+          if (
+            highlightedFeatureRef.current &&
+            highlightedFeatureRef.current !== feature
+          ) {
+            if ("setStyle" in highlightedFeatureRef.current) {
+              highlightedFeatureRef.current.setStyle(undefined);
+            }
+          }
+
+          // 현재 피처가 이전과 다르다면 하이라이트 스타일 적용
+          if (highlightedFeatureRef.current !== feature) {
+            const highlightStyle = new Style({
+              fill: new Fill({ color: STYLES.highlight.fill }),
+              stroke: new Stroke({
+                color: STYLES.highlight.stroke,
+                width: STYLES.highlight.strokeWidth,
+              }),
+            });
+            if ("setStyle" in feature) {
+              feature.setStyle(highlightStyle);
+            }
+            highlightedFeatureRef.current = feature;
+
+            console.log("호버된 피처:", feature.getProperties()); // 디버깅용 로그
+          }
+        } else {
+          // 피처가 없으면 하이라이트 제거
+          if (highlightedFeatureRef.current) {
+            if ("setStyle" in highlightedFeatureRef.current) {
+              highlightedFeatureRef.current.setStyle(undefined);
+            }
+            highlightedFeatureRef.current = null;
+          }
+        }
+      };
+
+      // 마우스 이동 이벤트 리스너 등록
+      map.on("pointermove", handlePointerMove);
+
+      // 클린업
+      return () => {
+        if (mapInstanceRef.current) {
+          mapInstanceRef.current.setTarget(undefined);
+        }
+      };
     };
+
+    initMap();
   }, []);
 
   return (
@@ -186,11 +230,23 @@ const MapComponent: React.FC = () => {
       style={{
         display: "flex",
         flexDirection: "column",
-        height: "100vh",
+        height: "100%",
         position: "relative",
       }}
     >
-      <MapLegend />
+      <SearchPanel />
+      <MapControls
+        onZoomIn={handleZoomIn}
+        onZoomOut={handleZoomOut}
+        onToggleLayerPanel={handleToggleLayerPanel}
+      />
+      <LayerPanel
+        isOpen={isLayerPanelOpen}
+        layers={availableLayers}
+        visibleLayers={visibleLayers}
+        onToggleLayer={handleToggleLayer}
+        onClose={() => setIsLayerPanelOpen(false)}
+      />
 
       <div
         ref={mapRef}
@@ -200,8 +256,6 @@ const MapComponent: React.FC = () => {
           flex: 1,
         }}
       />
-
-      <MapInstructions />
     </div>
   );
 };
