@@ -16,7 +16,6 @@ const SearchPanel: React.FC<SearchPanelProps> = ({ onSearch }) => {
     if (onSearch) {
       onSearch({ name: searchName, location: searchLocation });
     }
-    console.log("검색:", { name: searchName, location: searchLocation });
   };
 
   const handleReset = () => {
@@ -41,15 +40,11 @@ const SearchPanel: React.FC<SearchPanelProps> = ({ onSearch }) => {
         style={{ left: isOpen ? "20px" : "-320px" }}
       >
         {/* 제목 */}
-        <h3 className={commonStyles.panelTitle}>
-          🔍 검색 필터
-        </h3>
+        <h3 className={commonStyles.panelTitle}>🔍 검색 필터</h3>
 
         {/* 국가유산명 검색 */}
         <div className={styles.formGroup}>
-          <label className={commonStyles.formLabel}>
-            국가유산명
-          </label>
+          <label className={commonStyles.formLabel}>국가유산명</label>
           <input
             type="text"
             value={searchName}
@@ -70,9 +65,7 @@ const SearchPanel: React.FC<SearchPanelProps> = ({ onSearch }) => {
 
         {/* 소재지 검색 */}
         <div style={{ marginBottom: "24px" }}>
-          <label className={commonStyles.formLabel}>
-            소재지
-          </label>
+          <label className={commonStyles.formLabel}>소재지</label>
           <select
             value={searchLocation}
             onChange={(e) => setSearchLocation(e.target.value)}
@@ -99,7 +92,10 @@ const SearchPanel: React.FC<SearchPanelProps> = ({ onSearch }) => {
           <button onClick={handleSearch} className={commonStyles.primaryButton}>
             검색
           </button>
-          <button onClick={handleReset} className={commonStyles.secondaryButton}>
+          <button
+            onClick={handleReset}
+            className={commonStyles.secondaryButton}
+          >
             초기화
           </button>
         </div>

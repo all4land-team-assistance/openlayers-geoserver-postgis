@@ -12,7 +12,7 @@ import OSM from "ol/source/OSM";
 import { fromLonLat } from "ol/proj";
 import GeoJSON from "ol/format/GeoJSON";
 import { Style, Fill, Stroke } from "ol/style";
-import { defaults as defaultControls, Zoom } from "ol/control";
+import { Zoom } from "ol/control";
 import SearchPanel from "./SearchPanel";
 import LayerPanel from "./LayerPanel";
 import {
@@ -25,13 +25,11 @@ import { useMap } from "../hooks/useMap";
 import { useLayers } from "../hooks/useLayers";
 import type { LayerInfo } from "../types";
 
-// LayerInfo 타입을 컴포넌트에 export
-export type { LayerInfo };
-
 const MapComponent: React.FC = () => {
   const mapRef = useRef<HTMLDivElement>(null);
   const { mapInstanceRef, highlightedFeatureRef } = useMap();
   const { layersMapRef } = useLayers();
+  const isMapInitialized = useRef(false); // 맵 초기화 플래그
 
   // 레이어 패널 상태
   const [isLayerPanelOpen, setIsLayerPanelOpen] = useState(false);
@@ -46,17 +44,26 @@ const MapComponent: React.FC = () => {
   // 레이어 표시/숨김 토글 핸들러
   const handleToggleLayer = (layerName: string) => {
     const layer = layersMapRef.current.get(layerName);
-    if (layer) {
-      const newVisibleLayers = new Set(visibleLayers);
-      if (visibleLayers.has(layerName)) {
-        newVisibleLayers.delete(layerName);
-        layer.setVisible(false);
-      } else {
-        newVisibleLayers.add(layerName);
-        layer.setVisible(true);
-      }
-      setVisibleLayers(newVisibleLayers);
+    if (!layer) {
+      console.error("❌ 레이어를 찾을 수 없습니다:", layerName);
+      return;
     }
+
+    const newVisibleLayers = new Set(visibleLayers);
+    if (visibleLayers.has(layerName)) {
+      newVisibleLayers.delete(layerName);
+      layer.setVisible(false);
+    } else {
+      newVisibleLayers.add(layerName);
+      layer.setVisible(true);
+
+      // 강제로 맵 재렌더링 및 업데이트
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.updateSize();
+        mapInstanceRef.current.renderSync();
+      }
+    }
+    setVisibleLayers(newVisibleLayers);
   };
 
   // GeoServer에서 레이어 목록을 동적으로 가져오는 함수
@@ -104,12 +111,16 @@ const MapComponent: React.FC = () => {
   useEffect(() => {
     if (!mapRef.current) return;
 
-    // 이미 맵이 초기화되어 있으면 이전 맵 제거 후 새로 생성
-    if (mapInstanceRef.current) {
-      console.log("기존 맵 제거 중...");
-      mapInstanceRef.current.setTarget(undefined);
-      mapInstanceRef.current = null;
+    // React Strict Mode로 인한 중복 실행 방지
+    if (isMapInitialized.current) {
+      return;
     }
+
+    // 플래그를 즉시 설정하여 중복 실행 방지
+    isMapInitialized.current = true;
+
+    // layersMapRef 초기화
+    layersMapRef.current.clear();
 
     const initMap = async () => {
       // 기본 배경 지도 레이어 (OpenStreetMap)
@@ -133,11 +144,15 @@ const MapComponent: React.FC = () => {
         layers.forEach((layerInfo) => {
           const vectorSource = new VectorSource({
             url: `${GEOSERVER_URL}/wfs?service=WFS&version=1.1.0&request=GetFeature&typename=${WORKSPACE}:${layerInfo.name}&outputFormat=application/json`,
-            format: new GeoJSON(),
+            format: new GeoJSON({
+              dataProjection: "EPSG:4326", // GeoServer에서 오는 데이터 좌표계
+              featureProjection: "EPSG:3857", // OpenLayers 맵 좌표계
+            }),
           });
 
           const vectorLayer = new VectorLayer({
             source: vectorSource,
+            visible: false, // 초기에는 숨김 상태 (체크박스 선택 시에만 표시)
             style: new Style({
               fill: new Fill({ color: LAYER_STYLE.fill }),
               stroke: new Stroke({
@@ -152,13 +167,15 @@ const MapComponent: React.FC = () => {
 
           // 에러 핸들링
           vectorSource.on("featuresloaderror", (event) => {
-            console.error(`${layerInfo.displayName} 데이터 로딩 실패:`, event);
+            console.error(
+              `❌ ${layerInfo.displayName} 데이터 로딩 실패:`,
+              event
+            );
           });
         });
       }
 
       // OpenLayers 지도 인스턴스 생성 및 설정
-      console.log("🗺️ 맵 생성 시작");
       const map = new OLMap({
         target: mapRef.current!,
         layers: [osmLayer, ...vectorLayers],
@@ -172,16 +189,12 @@ const MapComponent: React.FC = () => {
           }),
         ],
       });
-      console.log(
-        "🗺️ 맵 생성 완료, 컨트롤 수:",
-        map.getControls().getArray().length
-      );
 
       mapInstanceRef.current = map;
 
-      // 레이어 목록 및 가시성 상태 초기화
+      // 레이어 목록 및 가시성 상태 초기화 (초기에는 아무 레이어도 표시하지 않음)
       setAvailableLayers(layers);
-      setVisibleLayers(new Set(layers.map((l) => l.name)));
+      setVisibleLayers(new Set()); // 빈 Set으로 초기화 (선택한 레이어만 표시)
 
       // 마우스 호버 이벤트 핸들러 - 행정구역에 마우스를 올리면 하이라이트
       const handlePointerMove = (event: { pixel: number[] }) => {
@@ -213,8 +226,6 @@ const MapComponent: React.FC = () => {
               feature.setStyle(highlightStyle);
             }
             highlightedFeatureRef.current = feature;
-
-            console.log("호버된 피처:", feature.getProperties()); // 디버깅용 로그
           }
         } else {
           // 피처가 없으면 하이라이트 제거
@@ -232,9 +243,20 @@ const MapComponent: React.FC = () => {
 
       // 클린업
       return () => {
+        isMapInitialized.current = false; // 플래그 리셋
         if (mapInstanceRef.current) {
+          // 이벤트 리스너 제거
+          mapInstanceRef.current.un("pointermove", handlePointerMove);
+          // 모든 레이어 제거
+          mapInstanceRef.current.getLayers().clear();
+          // 모든 컨트롤 제거
+          mapInstanceRef.current.getControls().clear();
+          // 맵 타겟 해제
           mapInstanceRef.current.setTarget(undefined);
+          mapInstanceRef.current = null;
         }
+        // 레이어 맵도 초기화
+        layersMapRef.current.clear();
       };
     };
 
