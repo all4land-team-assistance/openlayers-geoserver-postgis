@@ -27,13 +27,6 @@ export interface LayerPanelProps {
   onClose: () => void;
 }
 
-// 맵 컨트롤 Props
-export interface MapControlsProps {
-  onZoomIn: () => void;
-  onZoomOut: () => void;
-  onToggleLayerPanel: () => void;
-}
-
 // 검색 패널 Props
 export interface SearchPanelProps {
   onSearch?: (searchParams: SearchParams) => void;
@@ -41,4 +34,3 @@ export interface SearchPanelProps {
 
 // 맵 인스턴스 및 레이어 맵
 export type VectorLayerMap = Map<string, VectorLayer<VectorSource>>;
-

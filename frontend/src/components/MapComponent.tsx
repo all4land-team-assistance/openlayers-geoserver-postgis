@@ -12,11 +12,15 @@ import OSM from "ol/source/OSM";
 import { fromLonLat } from "ol/proj";
 import GeoJSON from "ol/format/GeoJSON";
 import { Style, Fill, Stroke } from "ol/style";
-import { defaults as defaultControls } from "ol/control";
+import { defaults as defaultControls, Zoom } from "ol/control";
 import SearchPanel from "./SearchPanel";
-import MapControls from "./MapControls";
 import LayerPanel from "./LayerPanel";
-import { GEOSERVER_URL, WORKSPACE, STYLES } from "../config/constants";
+import {
+  GEOSERVER_URL,
+  WORKSPACE,
+  STYLES,
+  LAYER_STYLE,
+} from "../config/constants";
 import { useMap } from "../hooks/useMap";
 import { useLayers } from "../hooks/useLayers";
 import type { LayerInfo } from "../types";
@@ -26,7 +30,7 @@ export type { LayerInfo };
 
 const MapComponent: React.FC = () => {
   const mapRef = useRef<HTMLDivElement>(null);
-  const { mapInstanceRef, highlightedFeatureRef, handleZoomIn, handleZoomOut } = useMap();
+  const { mapInstanceRef, highlightedFeatureRef } = useMap();
   const { layersMapRef } = useLayers();
 
   // 레이어 패널 상태
@@ -85,7 +89,7 @@ const MapComponent: React.FC = () => {
           layers.push({
             name: layerName,
             displayName: title || layerName,
-            color: "rgba(100, 149, 237, 0.3)",
+            color: LAYER_STYLE.fill,
           });
         }
       }
@@ -99,6 +103,13 @@ const MapComponent: React.FC = () => {
 
   useEffect(() => {
     if (!mapRef.current) return;
+
+    // 이미 맵이 초기화되어 있으면 이전 맵 제거 후 새로 생성
+    if (mapInstanceRef.current) {
+      console.log("기존 맵 제거 중...");
+      mapInstanceRef.current.setTarget(undefined);
+      mapInstanceRef.current = null;
+    }
 
     const initMap = async () => {
       // 기본 배경 지도 레이어 (OpenStreetMap)
@@ -128,10 +139,10 @@ const MapComponent: React.FC = () => {
           const vectorLayer = new VectorLayer({
             source: vectorSource,
             style: new Style({
-              fill: new Fill({ color: layerInfo.color }),
+              fill: new Fill({ color: LAYER_STYLE.fill }),
               stroke: new Stroke({
-                color: "#4169E1",
-                width: 1.5,
+                color: LAYER_STYLE.stroke,
+                width: LAYER_STYLE.strokeWidth,
               }),
             }),
           });
@@ -147,6 +158,7 @@ const MapComponent: React.FC = () => {
       }
 
       // OpenLayers 지도 인스턴스 생성 및 설정
+      console.log("🗺️ 맵 생성 시작");
       const map = new OLMap({
         target: mapRef.current!,
         layers: [osmLayer, ...vectorLayers],
@@ -154,12 +166,16 @@ const MapComponent: React.FC = () => {
           center: fromLonLat([126.978, 37.5665]), // 서울 중심 좌표로 변환
           zoom: 8, // 초기 줌 레벨
         }),
-        controls: defaultControls({
-          attribution: false, // 저작권 표시 제거
-          zoom: false, // 줌 컨트롤 제거 (나중에 커스텀으로 추가 예정)
-          rotate: false, // 회전 컨트롤 제거
-        }),
+        controls: [
+          new Zoom({
+            target: "zoom-controls", // 커스텀 위치에 줌 컨트롤 추가
+          }),
+        ],
       });
+      console.log(
+        "🗺️ 맵 생성 완료, 컨트롤 수:",
+        map.getControls().getArray().length
+      );
 
       mapInstanceRef.current = map;
 
@@ -235,11 +251,39 @@ const MapComponent: React.FC = () => {
       }}
     >
       <SearchPanel />
-      <MapControls
-        onZoomIn={handleZoomIn}
-        onZoomOut={handleZoomOut}
-        onToggleLayerPanel={handleToggleLayerPanel}
+
+      {/* OpenLayers 기본 줌 컨트롤 */}
+      <div
+        id="zoom-controls"
+        style={{
+          position: "absolute",
+          top: "20px",
+          right: "20px",
+          zIndex: 1000,
+        }}
       />
+
+      {/* 햄버거 버튼 (레이어 토글) */}
+      <button
+        onClick={handleToggleLayerPanel}
+        style={{
+          position: "absolute",
+          top: "80px", // 줌 버튼 아래로
+          right: "20px",
+          zIndex: 1000,
+          background: "rgba(255, 255, 255, 0.9)",
+          border: "1px solid #ddd",
+          borderRadius: "8px",
+          padding: "12px",
+          fontSize: "18px",
+          cursor: "pointer",
+          boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
+        }}
+        title="레이어 목록"
+      >
+        ☰
+      </button>
+
       <LayerPanel
         isOpen={isLayerPanelOpen}
         layers={availableLayers}
