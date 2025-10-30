@@ -1,0 +1,113 @@
+/**
+ * LayerPanel 컴포넌트 스타일
+ */
+
+.overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.3);
+  z-index: 1500;
+  backdrop-filter: blur(2px);
+  transition: all 0.3s ease;
+}
+
+.panel {
+  position: absolute;
+  top: 80px;
+  right: 20px;
+  width: 280px;
+  max-height: calc(100vh - 200px);
+  overflow-y: auto;
+  z-index: 1501;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.closeButton {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 20px;
+  color: #64748b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+}
+
+.closeButton:hover {
+  background-color: #f1f5f9;
+  color: #1e293b;
+}
+
+.emptyState {
+  padding: 20px;
+  text-align: center;
+  color: #64748b;
+  font-size: 14px;
+}
+
+.layerList {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.layerItem {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  background-color: #f8fafc;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: 2px solid transparent;
+}
+
+.layerItem.active {
+  background-color: #f0f9ff;
+  border-color: #3b82f6;
+}
+
+.layerItem:hover:not(.active) {
+  background-color: #f1f5f9;
+}
+
+.checkbox {
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+  accent-color: #3b82f6;
+}
+
+.colorIndicator {
+  width: 20px;
+  height: 20px;
+  border: 2px solid #4169e1;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+.layerName {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.layerItem.active .layerName {
+  color: #1e293b;
+}
+
