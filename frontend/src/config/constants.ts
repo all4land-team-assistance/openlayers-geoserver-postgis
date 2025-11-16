@@ -4,9 +4,8 @@
  */
 
 // GeoServer 연결 설정
-export const GEOSERVER_URL =
-  import.meta.env.VITE_GEOSERVER_URL || "http://localhost:8080/geoserver";
-export const WORKSPACE = "test"; // GeoServer 워크스페이스명
+export const GEOSERVER_URL = "/api/geoserver";
+export const WORKSPACE = "sbsj";
 
 // 지도 초기 설정
 export const MAP_CONFIG = {
@@ -16,7 +15,7 @@ export const MAP_CONFIG = {
 
 // 레이어 기본 스타일 (모든 레이어에 적용)
 export const LAYER_STYLE = {
-  fill: "rgba(100, 149, 237, 0.3)", // 반투명 파란색 채우기
+  fill: "rgba(100, 149, 237, 0.3)", // 반투명 파란색
   stroke: "#4169E1", // 파란색 테두리
   strokeWidth: 1.5,
 } as const;
@@ -24,7 +23,7 @@ export const LAYER_STYLE = {
 // 마우스 호버 시 하이라이트 스타일
 export const STYLES = {
   highlight: {
-    fill: "rgba(255, 255, 0, 0.6)", // 반투명 노란색 채우기
+    fill: "rgba(255, 255, 0, 0.6)", // 반투명 노란색
     stroke: "yellow", // 노란색 테두리
     strokeWidth: 3, // 테두리 두께
   },
