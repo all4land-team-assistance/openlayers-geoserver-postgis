@@ -7,7 +7,7 @@ const app = express();
 app.use(cors({ origin: ["http://localhost:5173", "http://127.0.0.1:5173"] }));
 
 // GeoServer 프록시 설정
-const GEOSERVER_BASE = "http://34.47.71.252/geoserver";
+const GEOSERVER_BASE = "http://34.47.92.35/geoserver";
 
 app.use("/api/geoserver", async (req, res) => {
   try {
