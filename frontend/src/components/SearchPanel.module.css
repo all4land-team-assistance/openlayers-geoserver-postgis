@@ -49,3 +49,189 @@
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
 }
 
+/* 검색 결과 컨테이너 */
+.searchResultsContainer {
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 2px solid rgba(226, 232, 240, 0.8);
+}
+
+.resultsTitle {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1e293b;
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.loading {
+  padding: 16px;
+  text-align: center;
+  color: #64748b;
+  font-size: 14px;
+}
+
+.error {
+  padding: 12px 16px;
+  background-color: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 8px;
+  color: #dc2626;
+  font-size: 14px;
+  margin-bottom: 16px;
+}
+
+.noResults {
+  padding: 16px;
+  text-align: center;
+  color: #94a3b8;
+  font-size: 14px;
+}
+
+.resultsList {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 400px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+/* 스크롤바 스타일 */
+.resultsList::-webkit-scrollbar {
+  width: 6px;
+}
+
+.resultsList::-webkit-scrollbar-track {
+  background: rgba(241, 245, 249, 0.5);
+  border-radius: 3px;
+}
+
+.resultsList::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.5);
+  border-radius: 3px;
+}
+
+.resultsList::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.7);
+}
+
+.resultItem {
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  border-radius: 8px;
+  transition: all 0.2s ease;
+  cursor: pointer;
+  user-select: none;
+}
+
+.resultItem:hover {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: #3b82f6;
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.15);
+  transform: translateY(-1px);
+}
+
+.resultHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.5);
+}
+
+.heritageName {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1e293b;
+  flex: 1;
+}
+
+.tableName {
+  font-size: 11px;
+  padding: 4px 8px;
+  background: rgba(59, 130, 246, 0.1);
+  color: #3b82f6;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.resultDetails {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.resultField {
+  display: flex;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.fieldName {
+  font-weight: 500;
+  color: #64748b;
+  min-width: 80px;
+  margin-right: 8px;
+}
+
+.fieldValue {
+  color: #1e293b;
+  flex: 1;
+  word-break: break-word;
+}
+
+.locationIcon {
+  font-size: 16px;
+  margin-left: 8px;
+}
+
+/* 지도 모드 토글 */
+.mapToggleContainer {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px dashed rgba(226, 232, 240, 0.9);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mapToggleLabel {
+  font-size: 13px;
+  color: #64748b;
+}
+
+.mapToggleButtons {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.mapToggleButton {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s ease-in-out;
+  color: #64748b;
+}
+
+.mapToggleButton:hover {
+  border-color: #3b82f6;
+  color: #1d4ed8;
+}
+
+.mapToggleButtonActive {
+  border-color: #3b82f6;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-weight: 600;
+}
+

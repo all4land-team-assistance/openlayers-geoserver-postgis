@@ -16,10 +16,12 @@ import { Style, Fill, Stroke } from "ol/style";
 import { Zoom } from "ol/control";
 import SearchPanel from "./SearchPanel";
 import LayerPanel from "./LayerPanel";
-import { GEOSERVER_URL, WORKSPACE, STYLES, LAYER_STYLE } from "../config/constants";
+import { GEOSERVER_URL, WORKSPACE, LAYER_STYLE } from "../config/constants";
 import { useMap } from "../hooks/useMap";
 import { useLayers } from "../hooks/useLayers";
-import type { LayerInfo } from "../types";
+import type { LayerInfo, SearchResultItem, MapMode } from "../types";
+import Point from "ol/geom/Point";
+import Feature from "ol/Feature";
 import CircleStyle from "ol/style/Circle";
 import Overlay from "ol/Overlay";
 
@@ -105,6 +107,13 @@ const MapComponent: React.FC = () => {
   const [isLayerPanelOpen, setIsLayerPanelOpen] = useState(false);
   const [availableLayers, setAvailableLayers] = useState<LayerInfo[]>([]);
   const [visibleLayers, setVisibleLayers] = useState<Set<string>>(new Set());
+
+  // 지도 모드 (2D / 3D)
+  const [mapMode, setMapMode] = useState<MapMode>("2d");
+
+  // 검색 결과 레이어 관리
+  const searchResultSourceRef = useRef<VectorSource | null>(null);
+  const searchResultLayerRef = useRef<VectorLayer<VectorSource> | null>(null);
 
   const handleToggleLayerPanel = () => setIsLayerPanelOpen(!isLayerPanelOpen);
 
@@ -267,10 +276,51 @@ const MapComponent: React.FC = () => {
         });
       });
 
+      // 검색 결과 레이어 생성 (클러스터링 적용)
+      const searchResultSource = new VectorSource();
+      const searchResultClusterSource = new Cluster({
+        distance: 40,
+        source: searchResultSource,
+      });
+      
+      const searchResultLayer = new VectorLayer({
+        source: searchResultClusterSource,
+        visible: true,
+        className: "search-results",
+        style: (feature) => {
+          const clusterFeatures = feature.get("features");
+          const size = clusterFeatures?.length || 0;
+          
+          // 클러스터인 경우
+          if (size > 1) {
+            const r = Math.max(18, Math.min(44, 12 + Math.log(size) * 10));
+            return new Style({
+              image: new CircleStyle({
+                radius: r,
+                fill: new Fill({ color: "rgba(59, 130, 246, 0.9)" }),
+                stroke: new Stroke({ color: "#1e40af", width: 2 }),
+              }),
+              text: new Text({
+                text: String(size),
+                font: "700 14px system-ui, -apple-system, Segoe UI, Roboto",
+                fill: new Fill({ color: "#fff" }),
+                stroke: new Stroke({ color: "rgba(0,0,0,0.35)", width: 3 }),
+              }),
+            });
+          }
+          
+          // 단일 마커인 경우
+          const props = clusterFeatures?.[0]?.getProperties() || feature.getProperties();
+          return makeSinglePointStyle(props, mapInstanceRef.current || undefined);
+        },
+      });
+      searchResultSourceRef.current = searchResultSource;
+      searchResultLayerRef.current = searchResultLayer;
+
       // 맵 생성
       const map = new OLMap({
         target: mapRef.current!,
-        layers: [osmLayer, ...olLayers],
+        layers: [osmLayer, searchResultLayer, ...olLayers],
         view: new View({
           center: fromLonLat([126.978, 37.5665]),
           zoom: 8,
@@ -288,6 +338,8 @@ const MapComponent: React.FC = () => {
           if (pin) pin.setVisible(!useCluster);
           if (cluster) cluster.setVisible(useCluster);
         });
+        // 검색 결과 레이어는 자동으로 스타일이 업데이트되므로 별도 처리 불필요
+        // (레이어의 style 함수가 매번 호출됨)
         map.renderSync();
       };
       map.getView().on("change:resolution", updateClusterVisibility);
@@ -301,8 +353,7 @@ const MapComponent: React.FC = () => {
           offset: [0, -12],
           stopEvent: true,
           autoPan: true,
-          autoPanAnimation: { duration: 250 },
-          autoPanMargin: 24,
+          // autoPanAnimation / autoPanMargin 타입 오류가 있어 기본 설정만 사용
         });
         map.addOverlay(overlayRef.current);
       }
@@ -360,6 +411,47 @@ const MapComponent: React.FC = () => {
         // 클러스터 클릭 시 동작
         const layerClass =
           String(pickedLayer?.get("className") || pickedLayer?.getClassName?.() || "");
+        
+        // 검색 결과 마커 클릭 시 팝업 표시
+        if (layerClass.includes("search-results")) {
+          // 클러스터인 경우 확대
+          const clusterFeatures = pickedFeature.get("features");
+          if (clusterFeatures && clusterFeatures.length > 1) {
+            const view = map.getView();
+            view.animate({
+              zoom: (view.getZoom() || 8) + 1.2,
+              center: evt.coordinate,
+              duration: 200,
+            });
+            return;
+          }
+          
+          // 단일 마커인 경우 팝업 표시
+          const actualFeature = clusterFeatures?.[0] || pickedFeature;
+          const props = actualFeature.getProperties();
+          const name = props["국가유산명"] || "이름 없음";
+          const type = props["종목명"] || props["ccmaName"] || "";
+          
+          // 검색 결과 정보를 팝업으로 표시
+          const html = `
+            <div style="padding: 12px; max-width: 300px;">
+              <div style="font-weight: 600; font-size: 16px; margin-bottom: 8px;">
+                ${name}
+              </div>
+              ${type ? `<div style="color: #64748b; font-size: 14px; margin-bottom: 8px;">${type}</div>` : ""}
+              <button 
+                data-action="close-card" 
+                style="margin-top: 8px; padding: 6px 12px; background: #3b82f6; color: white; border: none; border-radius: 4px; cursor: pointer;"
+              >
+                닫기
+              </button>
+            </div>
+          `;
+          setPopupHtml(html);
+          overlayRef.current?.setPosition(evt.coordinate);
+          return;
+        }
+        
         if (layerClass.includes("heritage-cluster")) {
           const members = pickedFeature.get("features") || [];
           if (members.length > 1) {
@@ -456,12 +548,12 @@ const MapComponent: React.FC = () => {
 
       // 빈 곳 클릭 → 팝업 닫기
       const onPointerDown = (e: any) => {
-        if (!map.hasFeatureAtPixel(e.pixel)) {
+        if (!map.hasFeatureAtPixel(e.pixel as any)) {
           setPopupHtml("");
           overlayRef.current?.setPosition(undefined);
         }
       };
-      map.on("pointerdown", onPointerDown);
+      map.on("pointerdown" as any, onPointerDown);
 
       // 상태 반영
       setAvailableLayers(layers);
@@ -469,10 +561,10 @@ const MapComponent: React.FC = () => {
 
       // 정리
       return () => {
-        map.getView().un("change:resolution", updateClusterVisibility);
-        map.un("pointermove", handlePointerMove);
-        map.un("singleclick", handleSingleClick);
-        map.un("pointerdown", onPointerDown);
+        map.getView().un("change:resolution" as any, updateClusterVisibility);
+        map.un("pointermove" as any, handlePointerMove);
+        map.un("singleclick" as any, handleSingleClick);
+        map.un("pointerdown" as any, onPointerDown);
         popupRef.current?.removeEventListener("click", onPopupClick);
 
         if (mapInstanceRef.current) {
@@ -503,9 +595,98 @@ const MapComponent: React.FC = () => {
     map.renderSync();
   }, [visibleLayers, layersMapRef, mapInstanceRef]);
 
+  // 검색 결과 클릭 시 지도 이동 및 마커 표시
+  const handleLocationClick = (coordinates: [number, number]) => {
+    if (!mapInstanceRef.current) return;
+
+    const [lon, lat] = coordinates;
+    const view = mapInstanceRef.current.getView();
+    
+    // 좌표를 OpenLayers 좌표계로 변환 (EPSG:3857)
+    const center = fromLonLat([lon, lat]);
+    
+    // 지도 중심 이동 및 줌 조정
+    view.animate({
+      center: center,
+      zoom: 15, // 적절한 줌 레벨로 설정
+      duration: 1000, // 1초 애니메이션
+    });
+  };
+
+  // 검색 결과를 지도에 마커로 표시 (성능 최적화)
+  const handleSearchResults = (results: SearchResultItem[]) => {
+    if (!searchResultSourceRef.current || !mapInstanceRef.current) return;
+
+    // 기존 검색 결과 제거
+    searchResultSourceRef.current.clear();
+
+    // 검색 결과 개수 제한 (너무 많으면 성능 저하)
+    const maxResults = 500;
+    const limitedResults = results.slice(0, maxResults);
+
+    // 배치로 마커 추가 (성능 최적화)
+    const features: Feature[] = [];
+    
+    limitedResults.forEach((item) => {
+      try {
+        let coordinates: [number, number] | null = null;
+
+        // 방법 1: 직접 추출된 lat, lon 사용 (POINT의 경우)
+        if (item.lat !== null && item.lat !== undefined && 
+            item.lon !== null && item.lon !== undefined) {
+          coordinates = [Number(item.lon), Number(item.lat)];
+        }
+        // 방법 2: geom_json에서 좌표 추출 (GeoJSON 형식)
+        else if (item.geom_json) {
+          const geomJson = item.geom_json;
+          
+          if (geomJson.type === "Point") {
+            coordinates = [geomJson.coordinates[0], geomJson.coordinates[1]];
+          } else if (geomJson.type === "Polygon" || geomJson.type === "MultiPolygon") {
+            const coords = geomJson.type === "Polygon" 
+              ? geomJson.coordinates[0] 
+              : geomJson.coordinates[0][0];
+            const centerLon = coords.reduce((sum: number, coord: number[]) => sum + coord[0], 0) / coords.length;
+            const centerLat = coords.reduce((sum: number, coord: number[]) => sum + coord[1], 0) / coords.length;
+            coordinates = [centerLon, centerLat];
+          }
+        }
+
+        if (coordinates) {
+          const [lon, lat] = coordinates;
+          const point = new Point(fromLonLat([lon, lat]));
+          const feature = new Feature({
+            geometry: point,
+            ...item, // 모든 검색 결과 데이터를 속성으로 저장
+          });
+          features.push(feature);
+        }
+      } catch (error) {
+        console.error("검색 결과 마커 추가 실패:", error, item);
+      }
+    });
+
+    // 한 번에 모든 피처 추가 (성능 최적화)
+    if (features.length > 0) {
+      searchResultSourceRef.current.addFeatures(features);
+      
+      // 지도 업데이트는 한 번만
+      setTimeout(() => {
+        if (mapInstanceRef.current) {
+          mapInstanceRef.current.renderSync();
+        }
+      }, 0);
+    }
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", position: "relative" }}>
-      <SearchPanel />
+      <SearchPanel 
+        onLocationClick={handleLocationClick} 
+        onSearchResults={handleSearchResults}
+        mapMode={mapMode}
+        onChangeMapMode={setMapMode}
+      />
 
       <div
         id="zoom-controls"
@@ -533,7 +714,11 @@ const MapComponent: React.FC = () => {
         onClose={() => setIsLayerPanelOpen(false)}
       />
 
-      <div ref={mapRef} style={{ width: "100%", height: "100%", flex: 1 }} />
+      {/* 지도 영역 (현재는 2D OpenLayers만 사용) */}
+      <div
+        ref={mapRef}
+        style={{ width: "100%", height: "100%", flex: 1 }}
+      />
       {/* 범례 이미지 */}
       <img
         src="/icons/범례.png"
