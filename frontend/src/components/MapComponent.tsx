@@ -99,6 +99,10 @@ const MapComponent: React.FC = () => {
 
   // 맵/레이어 레지스트리
   const mapRef = useRef<HTMLDivElement>(null);
+  const cesiumContainerRef = useRef<HTMLDivElement | null>(null);
+  const cesiumViewerRef = useRef<any>(null);
+  const cesiumLibRef = useRef<any | null>(null);
+  const cesiumSearchDataSourceRef = useRef<any | null>(null);
   const { mapInstanceRef } = useMap();
   const { layersMapRef } = useLayers();
   const isMapInitialized = useRef(false);
@@ -114,6 +118,7 @@ const MapComponent: React.FC = () => {
   // 검색 결과 레이어 관리
   const searchResultSourceRef = useRef<VectorSource | null>(null);
   const searchResultLayerRef = useRef<VectorLayer<VectorSource> | null>(null);
+  const latestSearchResultsRef = useRef<SearchResultItem[]>([]);
 
   const handleToggleLayerPanel = () => setIsLayerPanelOpen(!isLayerPanelOpen);
 
@@ -147,6 +152,205 @@ const MapComponent: React.FC = () => {
     setVisibleLayers(next);
     mapInstanceRef.current?.renderSync();
   };
+
+  // 3D 모드(Cesium) 초기화
+  useEffect(() => {
+    // 3D가 아니면 세슘 뷰어 제거
+    if (mapMode !== "3d") {
+      if (cesiumViewerRef.current) {
+        cesiumViewerRef.current.destroy();
+        cesiumViewerRef.current = null;
+      }
+      return;
+    }
+
+    // 이미 초기화되어 있거나 컨테이너가 없으면 종료
+    if (!cesiumContainerRef.current || cesiumViewerRef.current) return;
+
+    let canceled = false;
+
+    (async () => {
+      try {
+        const Cesium = await import("cesium");
+
+        if (canceled || !cesiumContainerRef.current) return;
+
+        // 동적으로 로드한 Cesium 네임스페이스를 저장해두어 나중에 재사용
+        cesiumLibRef.current = Cesium;
+
+        // 초기 화면: 기본 옵션으로 Cesium Viewer 생성
+        const viewer = new Cesium.Viewer(cesiumContainerRef.current, {
+          baseLayerPicker: false,
+          animation: false,
+          geocoder: false,
+          homeButton: false,
+          navigationHelpButton: false,
+          sceneModePicker: false,
+          fullscreenButton: false,
+        });
+
+        // 카메라/시간 자동 애니메이션 및 관성(스핀/이동/줌) 최소화
+        viewer.clock.shouldAnimate = false;
+        const controller = viewer.scene.screenSpaceCameraController;
+        controller.inertiaSpin = 0;
+        controller.inertiaTranslate = 0;
+        controller.inertiaZoom = 0;
+
+        // 나중에 검색 결과 클릭(flyTo) 등에 사용하기 위해 뷰어 저장
+        cesiumViewerRef.current = viewer;
+
+        // 검색 결과용 데이터소스 (클러스터링 포함)
+        const searchDataSource = new Cesium.CustomDataSource("search-results");
+        viewer.dataSources.add(searchDataSource);
+        cesiumSearchDataSourceRef.current = searchDataSource;
+
+        // 클러스터 설정 (2D와 유사한 원형 + 개수 표시)
+        const clustering = searchDataSource.clustering;
+        clustering.enabled = true;
+        clustering.pixelRange = 40; // 클러스터링 거리
+        clustering.minimumClusterSize = 2; // 2개 이상일 때 클러스터
+
+        clustering.clusterEvent.addEventListener(
+          (clusteredEntities: any[], cluster: any) => {
+            const size = clusteredEntities.length;
+
+            cluster.point = new Cesium.PointGraphics({
+              pixelSize: Math.max(18, Math.min(44, 12 + Math.log(size) * 10)),
+              color: Cesium.Color.fromCssColorString("rgba(59,130,246,0.9)"),
+              outlineColor: Cesium.Color.fromCssColorString("#1e40af"),
+              outlineWidth: 2,
+            });
+
+            cluster.label = new Cesium.LabelGraphics({
+              text: String(size),
+              fillColor: Cesium.Color.WHITE,
+              outlineColor: Cesium.Color.fromCssColorString("rgba(0,0,0,0.6)"),
+              outlineWidth: 2,
+              font: "700 14px system-ui, -apple-system, Segoe UI, Roboto",
+              style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+              pixelOffset: new Cesium.Cartesian2(0, 0),
+            });
+          }
+        );
+
+        // 서울(126.978, 37.5665) 기준에서 시작
+       // 마우스 조작 매핑을 먼저 설정
+const CameraEventType = Cesium.CameraEventType;
+controller.tiltEventTypes = [CameraEventType.RIGHT_DRAG, CameraEventType.PINCH];
+controller.rotateEventTypes = [CameraEventType.LEFT_DRAG, CameraEventType.MIDDLE_DRAG];
+controller.zoomEventTypes = [CameraEventType.WHEEL, CameraEventType.PINCH];
+
+// 줌 범위 설정
+controller.minimumZoomDistance = 100;
+controller.maximumZoomDistance = 50000000;
+
+// 카메라 설정 - orientation을 명시적으로 지정
+viewer.camera.setView({
+  destination: Cesium.Cartesian3.fromDegrees(126.978, 37.5665, 1500000),
+  orientation: {
+    heading: 0.0,
+    pitch: Cesium.Math.toRadians(-90), // 정확히 위에서 아래로
+    roll: 0.0
+  }
+});
+
+// 렌더링 최적화 (선택사항)
+viewer.scene.requestRenderMode = true;
+viewer.scene.maximumRenderTimeChange = Infinity;
+
+        // 이미 검색 결과가 있다면 3D 마커(클러스터) 동기화
+        if (
+          latestSearchResultsRef.current.length > 0 &&
+          cesiumSearchDataSourceRef.current
+        ) {
+          const CesiumNs = cesiumLibRef.current;
+          const dataSource = cesiumSearchDataSourceRef.current;
+
+          const maxResults = 500;
+          const results = latestSearchResultsRef.current.slice(0, maxResults);
+
+          dataSource.entities.removeAll();
+
+          results.forEach((item) => {
+            let coordinates: [number, number] | null = null;
+
+            if (
+              item.lat !== null &&
+              item.lat !== undefined &&
+              item.lon !== null &&
+              item.lon !== undefined
+            ) {
+              coordinates = [Number(item.lon), Number(item.lat)];
+            } else if (item.geom_json) {
+              const geomJson = item.geom_json;
+              if (geomJson.type === "Point") {
+                coordinates = [
+                  geomJson.coordinates[0],
+                  geomJson.coordinates[1],
+                ];
+              } else if (
+                geomJson.type === "Polygon" ||
+                geomJson.type === "MultiPolygon"
+              ) {
+                const coords =
+                  geomJson.type === "Polygon"
+                    ? geomJson.coordinates[0]
+                    : geomJson.coordinates[0][0];
+                const centerLon =
+                  coords.reduce(
+                    (sum: number, coord: number[]) => sum + coord[0],
+                    0
+                  ) / coords.length;
+                const centerLat =
+                  coords.reduce(
+                    (sum: number, coord: number[]) => sum + coord[1],
+                    0
+                  ) / coords.length;
+                coordinates = [centerLon, centerLat];
+              }
+            }
+
+            if (coordinates) {
+              const [lon, lat] = coordinates;
+              dataSource.entities.add({
+                position: CesiumNs.Cartesian3.fromDegrees(lon, lat),
+                point: {
+                  pixelSize: 10,
+                  color: CesiumNs.Color.RED,
+                  outlineColor: CesiumNs.Color.WHITE,
+                  outlineWidth: 2,
+                },
+                properties: {
+                  ...item,
+                },
+              });
+            }
+          });
+        }
+      } catch (e) {
+        console.error("Cesium 초기화 실패:", e);
+      }
+    })();
+
+    return () => {
+      canceled = true;
+    };
+  }, [mapMode]);
+
+  // 모드 전환 시 2D 지도 상태 초기화
+  useEffect(() => {
+    if (mapMode !== "2d" || !mapInstanceRef.current) return;
+
+    const view = mapInstanceRef.current.getView();
+
+    // 초기 화면: 서울(126.978, 37.5665), 줌 8
+    view.setCenter(fromLonLat([126.978, 37.5665]));
+    view.setZoom(8);
+
+    // 팝업도 함께 초기화
+    setPopupHtml("");
+    overlayRef.current?.setPosition(undefined);
+  }, [mapMode, mapInstanceRef]);
 
   // GeoServer에서 레이어 목록 획득
   const fetchLayersFromGeoServer = async (): Promise<LayerInfo[]> => {
@@ -597,14 +801,26 @@ const MapComponent: React.FC = () => {
 
   // 검색 결과 클릭 시 지도 이동 및 마커 표시
   const handleLocationClick = (coordinates: [number, number]) => {
+    const [lon, lat] = coordinates;
+
+    // 3D 모드: Cesium 카메라 이동
+    if (mapMode === "3d" && cesiumViewerRef.current && cesiumLibRef.current) {
+      const Cesium = cesiumLibRef.current;
+      cesiumViewerRef.current.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(lon, lat, 15000),
+        duration: 1.0,
+      });
+      return;
+    }
+
+    // 2D 모드: OpenLayers 뷰 이동
     if (!mapInstanceRef.current) return;
 
-    const [lon, lat] = coordinates;
     const view = mapInstanceRef.current.getView();
-    
+
     // 좌표를 OpenLayers 좌표계로 변환 (EPSG:3857)
     const center = fromLonLat([lon, lat]);
-    
+
     // 지도 중심 이동 및 줌 조정
     view.animate({
       center: center,
@@ -615,7 +831,7 @@ const MapComponent: React.FC = () => {
 
   // 검색 결과를 지도에 마커로 표시 (성능 최적화)
   const handleSearchResults = (results: SearchResultItem[]) => {
-    if (!searchResultSourceRef.current || !mapInstanceRef.current) return;
+    if (!searchResultSourceRef.current) return;
 
     // 기존 검색 결과 제거
     searchResultSourceRef.current.clear();
@@ -623,6 +839,9 @@ const MapComponent: React.FC = () => {
     // 검색 결과 개수 제한 (너무 많으면 성능 저하)
     const maxResults = 500;
     const limitedResults = results.slice(0, maxResults);
+
+    // 최신 검색 결과 기억 (2D/3D 공통 사용)
+    latestSearchResultsRef.current = limitedResults;
 
     // 배치로 마커 추가 (성능 최적화)
     const features: Feature[] = [];
@@ -669,13 +888,78 @@ const MapComponent: React.FC = () => {
     // 한 번에 모든 피처 추가 (성능 최적화)
     if (features.length > 0) {
       searchResultSourceRef.current.addFeatures(features);
-      
+
       // 지도 업데이트는 한 번만
       setTimeout(() => {
         if (mapInstanceRef.current) {
           mapInstanceRef.current.renderSync();
         }
       }, 0);
+    }
+
+    // 3D 모드인 경우, Cesium에도 마커(포인트 + 클러스터) 동기화
+    if (
+      mapMode === "3d" &&
+      cesiumLibRef.current &&
+      cesiumSearchDataSourceRef.current
+    ) {
+      const CesiumNs = cesiumLibRef.current;
+      const dataSource = cesiumSearchDataSourceRef.current;
+
+      dataSource.entities.removeAll();
+
+      limitedResults.forEach((item) => {
+        let coordinates: [number, number] | null = null;
+
+        if (
+          item.lat !== null &&
+          item.lat !== undefined &&
+          item.lon !== null &&
+          item.lon !== undefined
+        ) {
+          coordinates = [Number(item.lon), Number(item.lat)];
+        } else if (item.geom_json) {
+          const geomJson = item.geom_json;
+          if (geomJson.type === "Point") {
+            coordinates = [geomJson.coordinates[0], geomJson.coordinates[1]];
+          } else if (
+            geomJson.type === "Polygon" ||
+            geomJson.type === "MultiPolygon"
+          ) {
+            const coords =
+              geomJson.type === "Polygon"
+                ? geomJson.coordinates[0]
+                : geomJson.coordinates[0][0];
+            const centerLon =
+              coords.reduce(
+                (sum: number, coord: number[]) => sum + coord[0],
+                0
+              ) / coords.length;
+            const centerLat =
+              coords.reduce(
+                (sum: number, coord: number[]) => sum + coord[1],
+                0
+              ) / coords.length;
+            coordinates = [centerLon, centerLat];
+          }
+        }
+
+        if (coordinates) {
+          const [lon, lat] = coordinates;
+          dataSource.entities.add({
+            position: CesiumNs.Cartesian3.fromDegrees(lon, lat),
+            point: {
+              pixelSize: 10,
+              color: CesiumNs.Color.RED,
+              outlineColor: CesiumNs.Color.WHITE,
+              outlineWidth: 2,
+            },
+            properties: {
+              ...item,
+            },
+          });
+        }
+      });
     }
   };
 
@@ -714,11 +998,28 @@ const MapComponent: React.FC = () => {
         onClose={() => setIsLayerPanelOpen(false)}
       />
 
-      {/* 지도 영역 (현재는 2D OpenLayers만 사용) */}
-      <div
-        ref={mapRef}
-        style={{ width: "100%", height: "100%", flex: 1 }}
-      />
+      {/* 지도 영역: 2D(OpenLayers) / 3D(Cesium) 토글 */}
+      <div style={{ width: "100%", height: "100%", flex: 1 }}>
+        {/* 2D OpenLayers 지도 */}
+        <div
+          ref={mapRef}
+          style={{
+            width: "100%",
+            height: "100%",
+            display: mapMode === "2d" ? "block" : "none",
+          }}
+        />
+
+        {/* 3D Cesium 뷰어 */}
+        <div
+          ref={cesiumContainerRef}
+          style={{
+            width: "100%",
+            height: "100%",
+            display: mapMode === "3d" ? "block" : "none",
+          }}
+        />
+      </div>
       {/* 범례 이미지 */}
       <img
         src="/icons/범례.png"
