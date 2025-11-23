@@ -37,7 +37,7 @@ export interface GeoJSONGeometry {
 export interface SearchResultItem {
   [key: string]: any;
   source_table: string;
-  "국가유산명"?: string;
+  국가유산명?: string;
   geom_json?: GeoJSONGeometry;
   lat?: number | null; // POINT의 위도 (ST_Y)
   lon?: number | null; // POINT의 경도 (ST_X)
@@ -59,6 +59,7 @@ export interface SearchPanelProps {
   onSearchResults?: (results: SearchResultItem[]) => void;
   mapMode?: MapMode;
   onChangeMapMode?: (mode: MapMode) => void;
+  locationList?: string[];
 }
 
 // 맵 인스턴스 및 레이어 맵

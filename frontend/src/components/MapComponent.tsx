@@ -16,7 +16,12 @@ import { Style, Fill, Stroke } from "ol/style";
 import { Zoom } from "ol/control";
 import SearchPanel from "./SearchPanel";
 import LayerPanel from "./LayerPanel";
-import { GEOSERVER_URL, WORKSPACE, LAYER_STYLE } from "../config/constants";
+import {
+  GEOSERVER_URL,
+  WORKSPACE,
+  LAYER_STYLE,
+  CITY_NAME_MAP,
+} from "../config/constants";
 import { useMap } from "../hooks/useMap";
 import { useLayers } from "../hooks/useLayers";
 import type { LayerInfo, SearchResultItem, MapMode } from "../types";
@@ -34,9 +39,9 @@ import Icon from "ol/style/Icon";
 import { findBestDetail, ctcdBySidoName } from "../api/heritage";
 
 // ---- 설정값 ----
-const SCALE_CLUSTER = 18000;       // 1:18,000보다 멀리서 보면 클러스터
-const ICON_ZOOM_THRESHOLD = 10;    // 줌 10 이상에서만 아이콘 표시
-const ICON_SCALE = 0.1;            // 아이콘 크기
+const SCALE_CLUSTER = 18000; // 1:18,000보다 멀리서 보면 클러스터
+const ICON_ZOOM_THRESHOLD = 10; // 줌 10 이상에서만 아이콘 표시
+const ICON_SCALE = 0.1; // 아이콘 크기
 
 // 스케일 계산 유틸
 const DPI = 96;
@@ -106,6 +111,27 @@ const MapComponent: React.FC = () => {
   // 레이어 패널 상태
   const [isLayerPanelOpen, setIsLayerPanelOpen] = useState(false);
   const [availableLayers, setAvailableLayers] = useState<LayerInfo[]>([]);
+
+  // 레이어 목록에서 지역명 추출하여 소재지 목록 생성
+  const getLocationListFromLayers = (layers: LayerInfo[]): string[] => {
+    const regionSet = new Set<string>();
+
+    layers.forEach((layer) => {
+      // 레이어 이름에서 지역명 추출 (예: "Busan_Sajeok" -> "Busan")
+      const parts = layer.name.split("_");
+      if (parts.length >= 2) {
+        const regionName = parts[0]; // Busan, Seoul, Chungbuk 등
+        // 한글 변환 (CITY_NAME_MAP에 있으면 한글, 없으면 원본)
+        const koreanName = CITY_NAME_MAP[regionName] || regionName;
+        regionSet.add(koreanName);
+      }
+    });
+
+    // 한글 이름으로 정렬
+    return Array.from(regionSet).sort((a, b) => a.localeCompare(b, "ko"));
+  };
+
+  const [locationList, setLocationList] = useState<string[]>([]);
   const [visibleLayers, setVisibleLayers] = useState<Set<string>>(new Set());
 
   // 지도 모드 (2D / 3D)
@@ -133,7 +159,8 @@ const MapComponent: React.FC = () => {
     if (turnOn) {
       next.add(layerName);
       if (mapInstanceRef.current) {
-        const useCluster = resolutionToScale(mapInstanceRef.current) > SCALE_CLUSTER;
+        const useCluster =
+          resolutionToScale(mapInstanceRef.current) > SCALE_CLUSTER;
         if (pin) pin.setVisible(!useCluster);
         if (cluster) cluster.setVisible(useCluster);
       } else {
@@ -150,43 +177,42 @@ const MapComponent: React.FC = () => {
 
   // GeoServer에서 레이어 목록 획득
   const fetchLayersFromGeoServer = async (): Promise<LayerInfo[]> => {
-  try {
-    const response = await fetch(
-      `${GEOSERVER_URL}/wfs?service=WFS&version=1.1.0&request=GetCapabilities`
-    );
-    const text = await response.text();
-    const xml = new DOMParser().parseFromString(text, "text/xml");
+    try {
+      const response = await fetch(
+        `${GEOSERVER_URL}/wfs?service=WFS&version=1.1.0&request=GetCapabilities`
+      );
+      const text = await response.text();
+      const xml = new DOMParser().parseFromString(text, "text/xml");
 
-    const featureTypes = xml.getElementsByTagName("FeatureType");
-    const layers: LayerInfo[] = [];
+      const featureTypes = xml.getElementsByTagName("FeatureType");
+      const layers: LayerInfo[] = [];
 
-    for (let i = 0; i < featureTypes.length; i++) {
-      const nameElement = featureTypes[i].getElementsByTagName("Name")[0];
-      const titleElement = featureTypes[i].getElementsByTagName("Title")[0];
-      if (!nameElement) continue;
+      for (let i = 0; i < featureTypes.length; i++) {
+        const nameElement = featureTypes[i].getElementsByTagName("Name")[0];
+        const titleElement = featureTypes[i].getElementsByTagName("Title")[0];
+        if (!nameElement) continue;
 
-      const fullName = nameElement.textContent || ""; // 예: "sbsj:Busan_Kookbo"
-      if (!fullName.startsWith(`${WORKSPACE}:`)) continue;
+        const fullName = nameElement.textContent || ""; // 예: "sbsj:Busan_Kookbo"
+        if (!fullName.startsWith(`${WORKSPACE}:`)) continue;
 
-      const title = titleElement?.textContent || "";
+        const title = titleElement?.textContent || "";
 
-      // "sbsj:Busan_Kookbo" → "Busan_Kookbo"
-      const layerName = fullName.split(":")[1];
+        // "sbsj:Busan_Kookbo" → "Busan_Kookbo"
+        const layerName = fullName.split(":")[1];
 
-      layers.push({
-        name: layerName,             // Busan_Kookbo
-        displayName: title || layerName,
-        color: LAYER_STYLE.fill,
-      });
+        layers.push({
+          name: layerName, // Busan_Kookbo
+          displayName: title || layerName,
+          color: LAYER_STYLE.fill,
+        });
+      }
+
+      return layers;
+    } catch (e) {
+      console.error("GeoServer 레이어 목록 로딩 실패:", e);
+      return [];
     }
-
-    return layers;
-  } catch (e) {
-    console.error("GeoServer 레이어 목록 로딩 실패:", e);
-    return [];
-  }
-};
-
+  };
 
   useEffect(() => {
     if (!mapRef.current || isMapInitialized.current) return;
@@ -222,7 +248,10 @@ const MapComponent: React.FC = () => {
             const t = g?.getType?.();
             if (t === "Point" || t === "MultiPoint") {
               const props = feature.getProperties?.() || {};
-              return makeSinglePointStyle(props, mapInstanceRef.current || undefined);
+              return makeSinglePointStyle(
+                props,
+                mapInstanceRef.current || undefined
+              );
             }
             // 라인/폴리곤
             return new Style({
@@ -233,7 +262,10 @@ const MapComponent: React.FC = () => {
         });
 
         // :cluster 레이어
-        const clusterSource = new Cluster({ distance: 35, source: vectorSource });
+        const clusterSource = new Cluster({
+          distance: 35,
+          source: vectorSource,
+        });
         const clusterLayer = new VectorLayer({
           source: clusterSource,
           visible: false,
@@ -246,7 +278,10 @@ const MapComponent: React.FC = () => {
             if (size === 1) {
               const inner = members[0];
               const props = inner.getProperties?.() || {};
-              return makeSinglePointStyle(props, mapInstanceRef.current || undefined);
+              return makeSinglePointStyle(
+                props,
+                mapInstanceRef.current || undefined
+              );
             }
 
             // 다중 클러스터: 숫자 원형
@@ -282,7 +317,7 @@ const MapComponent: React.FC = () => {
         distance: 40,
         source: searchResultSource,
       });
-      
+
       const searchResultLayer = new VectorLayer({
         source: searchResultClusterSource,
         visible: true,
@@ -290,7 +325,7 @@ const MapComponent: React.FC = () => {
         style: (feature) => {
           const clusterFeatures = feature.get("features");
           const size = clusterFeatures?.length || 0;
-          
+
           // 클러스터인 경우
           if (size > 1) {
             const r = Math.max(18, Math.min(44, 12 + Math.log(size) * 10));
@@ -308,10 +343,14 @@ const MapComponent: React.FC = () => {
               }),
             });
           }
-          
+
           // 단일 마커인 경우
-          const props = clusterFeatures?.[0]?.getProperties() || feature.getProperties();
-          return makeSinglePointStyle(props, mapInstanceRef.current || undefined);
+          const props =
+            clusterFeatures?.[0]?.getProperties() || feature.getProperties();
+          return makeSinglePointStyle(
+            props,
+            mapInstanceRef.current || undefined
+          );
         },
       });
       searchResultSourceRef.current = searchResultSource;
@@ -409,9 +448,10 @@ const MapComponent: React.FC = () => {
         }
 
         // 클러스터 클릭 시 동작
-        const layerClass =
-          String(pickedLayer?.get("className") || pickedLayer?.getClassName?.() || "");
-        
+        const layerClass = String(
+          pickedLayer?.get("className") || pickedLayer?.getClassName?.() || ""
+        );
+
         // 검색 결과 마커 클릭 시 팝업 표시
         if (layerClass.includes("search-results")) {
           // 클러스터인 경우 확대
@@ -425,20 +465,24 @@ const MapComponent: React.FC = () => {
             });
             return;
           }
-          
+
           // 단일 마커인 경우 팝업 표시
           const actualFeature = clusterFeatures?.[0] || pickedFeature;
           const props = actualFeature.getProperties();
           const name = props["국가유산명"] || "이름 없음";
           const type = props["종목명"] || props["ccmaName"] || "";
-          
+
           // 검색 결과 정보를 팝업으로 표시
           const html = `
             <div style="padding: 12px; max-width: 300px;">
               <div style="font-weight: 600; font-size: 16px; margin-bottom: 8px;">
                 ${name}
               </div>
-              ${type ? `<div style="color: #64748b; font-size: 14px; margin-bottom: 8px;">${type}</div>` : ""}
+              ${
+                type
+                  ? `<div style="color: #64748b; font-size: 14px; margin-bottom: 8px;">${type}</div>`
+                  : ""
+              }
               <button 
                 data-action="close-card" 
                 style="margin-top: 8px; padding: 6px 12px; background: #3b82f6; color: white; border: none; border-radius: 4px; cursor: pointer;"
@@ -451,7 +495,7 @@ const MapComponent: React.FC = () => {
           overlayRef.current?.setPosition(evt.coordinate);
           return;
         }
-        
+
         if (layerClass.includes("heritage-cluster")) {
           const members = pickedFeature.get("features") || [];
           if (members.length > 1) {
@@ -471,13 +515,21 @@ const MapComponent: React.FC = () => {
 
         // 상세 조회 파라미터
         const props = pickedFeature.getProperties();
-        const kdcd = String(props["종목코드"] ?? props["ccbaKdcd"] ?? props["kdcd"] ?? "");
-        const sidoName = String(props["시도명"] ?? props["sido"] ?? props["ccbaCtcdNm"] ?? "");
-        const name = String(props["국가유산명"] ?? props["ccbaMnm1"] ?? props["name"] ?? "");
+        const kdcd = String(
+          props["종목코드"] ?? props["ccbaKdcd"] ?? props["kdcd"] ?? ""
+        );
+        const sidoName = String(
+          props["시도명"] ?? props["sido"] ?? props["ccbaCtcdNm"] ?? ""
+        );
+        const name = String(
+          props["국가유산명"] ?? props["ccbaMnm1"] ?? props["name"] ?? ""
+        );
         const ctcd = ctcdBySidoName[sidoName] ?? "";
         const [lon, lat] = toLonLat(evt.coordinate);
 
-        setPopupHtml(`<div style="font-weight:600">상세 정보 불러오는 중…</div>`);
+        setPopupHtml(
+          `<div style="font-weight:600">상세 정보 불러오는 중…</div>`
+        );
         overlayRef.current?.setPosition(evt.coordinate);
 
         try {
@@ -518,11 +570,15 @@ const MapComponent: React.FC = () => {
                 </div>
               </div>
 
-              ${d.image ? `
+              ${
+                d.image
+                  ? `
                 <div style="padding:0 16px 8px 16px;">
                   <img class="kh-img" src="${d.image}" alt=""
                        style="display:block;width:100%;border-radius:10px;" />
-                </div>` : ""}
+                </div>`
+                  : ""
+              }
 
               <div style="padding:0 16px 16px 16px;">
                 <button class="kh-btn" data-action="toggle-desc" style="
@@ -540,7 +596,11 @@ const MapComponent: React.FC = () => {
           `);
           overlayRef.current?.setPosition(evt.coordinate);
         } catch (e: any) {
-          setPopupHtml(`<div style="color:#c00">상세 조회 실패: ${e?.message || "오류"}</div>`);
+          setPopupHtml(
+            `<div style="color:#c00">상세 조회 실패: ${
+              e?.message || "오류"
+            }</div>`
+          );
           overlayRef.current?.setPosition(evt.coordinate);
         }
       };
@@ -557,6 +617,10 @@ const MapComponent: React.FC = () => {
 
       // 상태 반영
       setAvailableLayers(layers);
+
+      // 레이어 목록에서 지역명 추출하여 소재지 목록 생성
+      const locations = getLocationListFromLayers(layers);
+      setLocationList(locations);
       setVisibleLayers(new Set());
 
       // 정리
@@ -601,10 +665,10 @@ const MapComponent: React.FC = () => {
 
     const [lon, lat] = coordinates;
     const view = mapInstanceRef.current.getView();
-    
+
     // 좌표를 OpenLayers 좌표계로 변환 (EPSG:3857)
     const center = fromLonLat([lon, lat]);
-    
+
     // 지도 중심 이동 및 줌 조정
     view.animate({
       center: center,
@@ -626,28 +690,44 @@ const MapComponent: React.FC = () => {
 
     // 배치로 마커 추가 (성능 최적화)
     const features: Feature[] = [];
-    
+
     limitedResults.forEach((item) => {
       try {
         let coordinates: [number, number] | null = null;
 
         // 방법 1: 직접 추출된 lat, lon 사용 (POINT의 경우)
-        if (item.lat !== null && item.lat !== undefined && 
-            item.lon !== null && item.lon !== undefined) {
+        if (
+          item.lat !== null &&
+          item.lat !== undefined &&
+          item.lon !== null &&
+          item.lon !== undefined
+        ) {
           coordinates = [Number(item.lon), Number(item.lat)];
         }
         // 방법 2: geom_json에서 좌표 추출 (GeoJSON 형식)
         else if (item.geom_json) {
           const geomJson = item.geom_json;
-          
+
           if (geomJson.type === "Point") {
             coordinates = [geomJson.coordinates[0], geomJson.coordinates[1]];
-          } else if (geomJson.type === "Polygon" || geomJson.type === "MultiPolygon") {
-            const coords = geomJson.type === "Polygon" 
-              ? geomJson.coordinates[0] 
-              : geomJson.coordinates[0][0];
-            const centerLon = coords.reduce((sum: number, coord: number[]) => sum + coord[0], 0) / coords.length;
-            const centerLat = coords.reduce((sum: number, coord: number[]) => sum + coord[1], 0) / coords.length;
+          } else if (
+            geomJson.type === "Polygon" ||
+            geomJson.type === "MultiPolygon"
+          ) {
+            const coords =
+              geomJson.type === "Polygon"
+                ? geomJson.coordinates[0]
+                : geomJson.coordinates[0][0];
+            const centerLon =
+              coords.reduce(
+                (sum: number, coord: number[]) => sum + coord[0],
+                0
+              ) / coords.length;
+            const centerLat =
+              coords.reduce(
+                (sum: number, coord: number[]) => sum + coord[1],
+                0
+              ) / coords.length;
             coordinates = [centerLon, centerLat];
           }
         }
@@ -669,7 +749,7 @@ const MapComponent: React.FC = () => {
     // 한 번에 모든 피처 추가 (성능 최적화)
     if (features.length > 0) {
       searchResultSourceRef.current.addFeatures(features);
-      
+
       // 지도 업데이트는 한 번만
       setTimeout(() => {
         if (mapInstanceRef.current) {
@@ -680,25 +760,45 @@ const MapComponent: React.FC = () => {
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", position: "relative" }}>
-      <SearchPanel 
-        onLocationClick={handleLocationClick} 
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        height: "100%",
+        position: "relative",
+      }}
+    >
+      <SearchPanel
+        onLocationClick={handleLocationClick}
         onSearchResults={handleSearchResults}
         mapMode={mapMode}
+        locationList={locationList}
         onChangeMapMode={setMapMode}
       />
 
       <div
         id="zoom-controls"
-        style={{ position: "absolute", top: "20px", right: "20px", zIndex: 1000 }}
+        style={{
+          position: "absolute",
+          top: "20px",
+          right: "20px",
+          zIndex: 1000,
+        }}
       />
 
       <button
         onClick={handleToggleLayerPanel}
         style={{
-          position: "absolute", top: "80px", right: "20px", zIndex: 1000,
-          background: "rgba(255, 255, 255, 0.9)", border: "1px solid #ddd",
-          borderRadius: "8px", padding: "12px", fontSize: "18px", cursor: "pointer",
+          position: "absolute",
+          top: "80px",
+          right: "20px",
+          zIndex: 1000,
+          background: "rgba(255, 255, 255, 0.9)",
+          border: "1px solid #ddd",
+          borderRadius: "8px",
+          padding: "12px",
+          fontSize: "18px",
+          cursor: "pointer",
           boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
         }}
         title="레이어 목록"
@@ -715,26 +815,22 @@ const MapComponent: React.FC = () => {
       />
 
       {/* 지도 영역 (현재는 2D OpenLayers만 사용) */}
-      <div
-        ref={mapRef}
-        style={{ width: "100%", height: "100%", flex: 1 }}
-      />
+      <div ref={mapRef} style={{ width: "100%", height: "100%", flex: 1 }} />
       {/* 범례 이미지 */}
       <img
         src="/icons/범례.png"
         alt="범례"
         style={{
           position: "absolute",
-          bottom: "40px",   // 지도 하단에서 40px 위
-          right: "40px",    // 지도 오른쪽에서 40px 왼쪽 (적당히 조정 가능)
-          width: "200px",   // 이미지 크기 (원하는 대로 조정)
+          bottom: "40px", // 지도 하단에서 40px 위
+          right: "40px", // 지도 오른쪽에서 40px 왼쪽 (적당히 조정 가능)
+          width: "200px", // 이미지 크기 (원하는 대로 조정)
           borderRadius: "40px",
           boxShadow: "0 4px 10px rgba(0,0,0,0.15)",
           background: "rgba(255,255,255,0.9)",
           zIndex: 1000,
         }}
       />
-
 
       {/* 팝업 오버레이 DOM */}
       <div
