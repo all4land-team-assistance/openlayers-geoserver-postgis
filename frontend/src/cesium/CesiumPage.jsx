@@ -11,6 +11,10 @@ export default function CesiumPage({ style = { width: "100%", height: "100%" } }
     if (!containerRef.current) return;
     if (viewerRef.current) return;
 
+    const osm = new Cesium.OpenStreetMapImageryProvider({
+        url : 'https://tile.openstreetmap.org/'
+    });
+
     const viewer = new Cesium.Viewer(containerRef.current, {
       geocoder: false,              // 검색창
       homeButton: false,            // 집 모양 버튼
@@ -22,6 +26,12 @@ export default function CesiumPage({ style = { width: "100%", height: "100%" } }
       fullscreenButton: false,      // 전체 화면
       infoBox: false,               // 픽셀 정보 박스 제거
       selectionIndicator: false,    // 클릭 테두리 제거
+      
+      // 실제 월드 지형 terrain 활성화(rough data)
+      // terrain: Cesium.Terrain.fromWorldTerrain(),
+
+      // osm를 base로 할 경우 활성화
+      // baseLayer: Cesium.ImageryLayer.fromProviderAsync(osm),
     });
     viewerRef.current = viewer;
 
