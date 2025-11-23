@@ -24,6 +24,7 @@ import Point from "ol/geom/Point";
 import Feature from "ol/Feature";
 import CircleStyle from "ol/style/Circle";
 import Overlay from "ol/Overlay";
+import CesiumPage from "../cesium/CesiumPage";
 
 // 클러스터링/텍스트/아이콘
 import Cluster from "ol/source/Cluster";
@@ -715,10 +716,37 @@ const MapComponent: React.FC = () => {
       />
 
       {/* 지도 영역 (현재는 2D OpenLayers만 사용) */}
+      {/* 지도 영역(2D: OpenLayers, 3D: Cesium) */}
       <div
-        ref={mapRef}
-        style={{ width: "100%", height: "100%", flex: 1 }}
-      />
+        style={{
+          width: "100%",
+          height: "100%",
+          flex: 1,
+          position: "relative",
+        }}
+      >
+        {/* 2D 모드: 기존 OpenLayers 캔버스 */}
+        <div
+          ref={mapRef}
+          style={{
+            width: "100%",
+            height: "100%",
+            display: mapMode === "2d" ? "block" : "none",
+          }}
+        />
+
+        {/* 3D 모드: Cesium */}
+        {mapMode === "3d" && (
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+            }}
+          >
+            <CesiumPage />
+          </div>
+        )}
+      </div>
       {/* 범례 이미지 */}
       <img
         src="/icons/범례.png"
