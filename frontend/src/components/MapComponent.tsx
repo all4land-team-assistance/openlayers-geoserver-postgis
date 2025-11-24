@@ -24,6 +24,7 @@ import Point from "ol/geom/Point";
 import Feature from "ol/Feature";
 import CircleStyle from "ol/style/Circle";
 import Overlay from "ol/Overlay";
+import CesiumPage from "../cesium/CesiumPage";
 
 // 클러스터링/텍스트/아이콘
 import Cluster from "ol/source/Cluster";
@@ -111,6 +112,10 @@ const MapComponent: React.FC = () => {
   // 지도 모드 (2D / 3D)
   const [mapMode, setMapMode] = useState<MapMode>("2d");
 
+  // 3D 지도 선택 시 kr_admin1 name 항목 및 선택 항목 관리
+  const [admin1Options, setAdmin1Options] = useState<string[]>([]);
+  const [selectedAdmin1, setSelectedAdmin1] = useState<string | null>(null);
+
   // 검색 결과 레이어 관리
   const searchResultSourceRef = useRef<VectorSource | null>(null);
   const searchResultLayerRef = useRef<VectorLayer<VectorSource> | null>(null);
@@ -187,6 +192,35 @@ const MapComponent: React.FC = () => {
   }
 };
 
+  // GeoServer에서 kr_admin1의 name 목록 조회
+  const fetchAdmin1Names = async (): Promise<string[]> => {
+    try {
+      const url =
+        `${GEOSERVER_URL}/wfs` +
+        `?service=WFS&version=1.1.0&request=GetFeature` +
+        `&typeName=${WORKSPACE}:kr_admin1` +
+        `&propertyName=name` +
+        `&outputFormat=application/json` +
+        `&srsName=EPSG:4326`;
+
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("kr_admin1 WFS 요청 실패");
+
+      const json = await res.json();
+      const set = new Set<string>();
+
+      for (const f of json.features ?? []) {
+        const n = f.properties?.name;
+        if (n) set.add(String(n));
+      }
+
+      return Array.from(set).sort();
+    } catch (e) {
+      console.error("[fetchAdmin1Names] 실패:", e);
+      return [];
+    }
+  };
+
 
   useEffect(() => {
     if (!mapRef.current || isMapInitialized.current) return;
@@ -197,6 +231,10 @@ const MapComponent: React.FC = () => {
     const init = async () => {
       // 배경지도
       const osmLayer = new TileLayer({ source: new OSM() });
+
+      // kr_admin1 name 목록
+      const adminNames = await fetchAdmin1Names();
+      setAdmin1Options(adminNames);
 
       // 레이어 목록
       const layers = await fetchLayersFromGeoServer();
@@ -686,6 +724,9 @@ const MapComponent: React.FC = () => {
         onSearchResults={handleSearchResults}
         mapMode={mapMode}
         onChangeMapMode={setMapMode}
+        admin1Options={admin1Options}
+        selectedAdmin1={selectedAdmin1}
+        onChangeAdmin1={setSelectedAdmin1}
       />
 
       <div
@@ -715,10 +756,37 @@ const MapComponent: React.FC = () => {
       />
 
       {/* 지도 영역 (현재는 2D OpenLayers만 사용) */}
+      {/* 지도 영역(2D: OpenLayers, 3D: Cesium) */}
       <div
-        ref={mapRef}
-        style={{ width: "100%", height: "100%", flex: 1 }}
-      />
+        style={{
+          width: "100%",
+          height: "100%",
+          flex: 1,
+          position: "relative",
+        }}
+      >
+        {/* 2D 모드: 기존 OpenLayers 캔버스 */}
+        <div
+          ref={mapRef}
+          style={{
+            width: "100%",
+            height: "100%",
+            display: mapMode === "2d" ? "block" : "none",
+          }}
+        />
+
+        {/* 3D 모드: Cesium */}
+        {mapMode === "3d" && (
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+            }}
+          >
+            <CesiumPage selectedAdmin1={selectedAdmin1} />
+          </div>
+        )}
+      </div>
       {/* 범례 이미지 */}
       <img
         src="/icons/범례.png"
