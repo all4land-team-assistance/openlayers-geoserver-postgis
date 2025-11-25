@@ -12,6 +12,7 @@
   "dependencies": {
     "@types/ol": "^6.5.3",
     "axios": "^1.13.2",
+    "cesium": "^1.135.0",
     "ol": "^10.7.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"

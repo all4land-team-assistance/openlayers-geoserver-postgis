@@ -23,6 +23,8 @@ import type { LayerInfo, SearchResultItem, MapMode } from "../types";
 import Point from "ol/geom/Point";
 import Feature from "ol/Feature";
 import CircleStyle from "ol/style/Circle";
+import Overlay from "ol/Overlay";
+import CesiumPage from "../cesium/CesiumPage";
 
 // 클러스터링/텍스트/아이콘
 import Cluster from "ol/source/Cluster";
@@ -106,7 +108,7 @@ const MapComponent: React.FC = () => {
   const [availableLayers, setAvailableLayers] = useState<LayerInfo[]>([]);
   const [visibleLayers, setVisibleLayers] = useState<Set<string>>(new Set());
 
-  // 지도 모드
+  // 지도 모드 (2D / 3D)
   const [mapMode, setMapMode] = useState<MapMode>("2d");
 
   // 좌측 상세 패널 상태
@@ -114,6 +116,10 @@ const MapComponent: React.FC = () => {
   const [isDetailPanelOpen, setIsDetailPanelOpen] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
+
+  // 3D 지도 선택 시 kr_admin1 name 항목 및 선택 항목 관리
+  const [admin1Options, setAdmin1Options] = useState<string[]>([]);
+  const [selectedAdmin1, setSelectedAdmin1] = useState<string | null>(null);
 
   // 검색 결과 레이어 관리
   const searchResultSourceRef = useRef<VectorSource | null>(null);
@@ -138,8 +144,7 @@ const MapComponent: React.FC = () => {
     if (turnOn) {
       next.add(layerName);
       if (mapInstanceRef.current) {
-        const useCluster =
-          resolutionToScale(mapInstanceRef.current) > SCALE_CLUSTER;
+        const useCluster = resolutionToScale(mapInstanceRef.current) > SCALE_CLUSTER;
         if (pin) pin.setVisible(!useCluster);
         if (cluster) cluster.setVisible(useCluster);
       } else {
@@ -171,10 +176,10 @@ const MapComponent: React.FC = () => {
         const titleElement = featureTypes[i].getElementsByTagName("Title")[0];
         if (!nameElement) continue;
 
-        const fullName = nameElement.textContent || "";
+        const fullName = nameElement.textContent || ""; // "sbsj:Busan_Kookbo"
         if (!fullName.startsWith(`${WORKSPACE}:`)) continue;
         const title = titleElement?.textContent || "";
-        const layerName = fullName.split(":")[1];
+        const layerName = fullName.split(":")[1]; // "sbsj:Busan_Kookbo" → "Busan_Kookbo"
 
         layers.push({
           name: layerName,
@@ -183,14 +188,43 @@ const MapComponent: React.FC = () => {
         });
       }
 
-      return layers;
+    return layers;
+  } catch (e) {
+    console.error("GeoServer 레이어 목록 로딩 실패:", e);
+    return [];
+  }
+};
+
+  // GeoServer에서 kr_admin1의 name 목록 조회
+  const fetchAdmin1Names = async (): Promise<string[]> => {
+    try {
+      const url =
+        `${GEOSERVER_URL}/wfs` +
+        `?service=WFS&version=1.1.0&request=GetFeature` +
+        `&typeName=${WORKSPACE}:kr_admin1` +
+        `&propertyName=name` +
+        `&outputFormat=application/json` +
+        `&srsName=EPSG:4326`;
+
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("kr_admin1 WFS 요청 실패");
+
+      const json = await res.json();
+      const set = new Set<string>();
+
+      for (const f of json.features ?? []) {
+        const n = f.properties?.name;
+        if (n) set.add(String(n));
+      }
+
+      return Array.from(set).sort();
     } catch (e) {
-      console.error("GeoServer 레이어 목록 로딩 실패:", e);
+      console.error("[fetchAdmin1Names] 실패:", e);
       return [];
     }
   };
 
-  // 지도 튐 방지: 닫기 전에 저장하고 트랜지션 끝난 뒤 복원
+  // 지도 튐 방지- 닫기 전에 저장하고 트랜지션 끝난 뒤 복원
   const restoreViewRef = useRef<{ center: number[]; zoom: number } | null>(null);
   const isClosingRef = useRef(false);
 
@@ -226,9 +260,17 @@ const MapComponent: React.FC = () => {
     layersMapRef.current.clear();
 
     const init = async () => {
+      // 배경지도
       const osmLayer = new TileLayer({ source: new OSM() });
+
+      // kr_admin1 name 목록
+      const adminNames = await fetchAdmin1Names();
+      setAdmin1Options(adminNames);
+
+      // 레이어 목록
       const layers = await fetchLayersFromGeoServer();
 
+      // 벡터/클러스터 레이어 구성
       const olLayers: VectorLayer<VectorSource | Cluster>[] = [];
       layers.forEach((layerInfo) => {
         const vectorSource = new VectorSource({
@@ -239,6 +281,7 @@ const MapComponent: React.FC = () => {
           }),
         });
 
+        // :pin 레이어 (포인트는 아이콘/점 전환)
         const pinLayer = new VectorLayer({
           source: vectorSource,
           visible: false,
@@ -253,6 +296,7 @@ const MapComponent: React.FC = () => {
                 mapInstanceRef.current || undefined
               );
             }
+            // 라인/폴리곤
             return new Style({
               fill: new Fill({ color: "rgba(255,123,0,0.3)" }),
               stroke: new Stroke({ color: "#ff7b00", width: 2 }),
@@ -260,10 +304,8 @@ const MapComponent: React.FC = () => {
           },
         });
 
-        const clusterSource = new Cluster({
-          distance: 35,
-          source: vectorSource,
-        });
+        // cluster 레이어
+        const clusterSource = new Cluster({ distance: 35, source: vectorSource });
         const clusterLayer = new VectorLayer({
           source: clusterSource,
           visible: false,
@@ -272,6 +314,7 @@ const MapComponent: React.FC = () => {
             const members = feature.get("features") || [];
             const size = members.length;
 
+            // 단일일 때도 줌에 따라 아이콘/점 전환
             if (size === 1) {
               const inner = members[0];
               const props = inner.getProperties?.() || {};
@@ -281,6 +324,7 @@ const MapComponent: React.FC = () => {
               );
             }
 
+            // 다중 클러스터: 숫자 원형
             const r = Math.max(18, Math.min(44, 12 + Math.log(size) * 10));
             return new Style({
               image: new CircleStyle({
@@ -292,10 +336,7 @@ const MapComponent: React.FC = () => {
                 text: String(size),
                 font: "700 14px system-ui, -apple-system, Segoe UI, Roboto",
                 fill: new Fill({ color: "#fff" }),
-                stroke: new Stroke({
-                  color: "rgba(0,0,0,0.35)",
-                  width: 3,
-                }),
+                stroke: new Stroke({ color: "rgba(0,0,0,0.35)", width: 3 }),
               }),
             });
           },
@@ -325,6 +366,7 @@ const MapComponent: React.FC = () => {
           const clusterFeatures = feature.get("features");
           const size = clusterFeatures?.length || 0;
 
+          // 클러스터인 경우
           if (size > 1) {
             const r = Math.max(18, Math.min(44, 12 + Math.log(size) * 10));
             return new Style({
@@ -345,17 +387,15 @@ const MapComponent: React.FC = () => {
             });
           }
 
-          const props =
-            clusterFeatures?.[0]?.getProperties() || feature.getProperties();
-          return makeSinglePointStyle(
-            props,
-            mapInstanceRef.current || undefined
-          );
+          // 단일 마커인 경우
+          const props = clusterFeatures?.[0]?.getProperties() || feature.getProperties();
+          return makeSinglePointStyle( props, mapInstanceRef.current || undefined );
         },
       });
       searchResultSourceRef.current = searchResultSource;
       searchResultLayerRef.current = searchResultLayer;
 
+      // 맵 생성
       const map = new OLMap({
         target: mapRef.current!,
         layers: [osmLayer, searchResultLayer, ...olLayers],
@@ -367,6 +407,7 @@ const MapComponent: React.FC = () => {
       });
       mapInstanceRef.current = map;
 
+      // 줌/스케일에 따른 클러스터 <-> 핀 전환
       const updateClusterVisibility = () => {
         const useCluster = resolutionToScale(map) > SCALE_CLUSTER;
         visibleLayers.forEach((baseName) => {
@@ -403,11 +444,8 @@ const MapComponent: React.FC = () => {
 
         if (!pickedFeature) return;
 
-        const layerClass = String(
-          pickedLayer?.get("className") ||
-            pickedLayer?.getClassName?.() ||
-            ""
-        );
+        // 클러스터 클릭 시 동작
+        const layerClass = String( pickedLayer?.get("className") || pickedLayer?.getClassName?.() || "" );
 
         // 검색 결과 클러스터면 확대만
         if (layerClass.includes("search-results")) {
@@ -438,19 +476,11 @@ const MapComponent: React.FC = () => {
           if (members.length === 1) pickedFeature = members[0];
         }
 
+        // 상세 조회 파라미터
         const props = pickedFeature.getProperties();
-        const kdcd = String(
-          props["종목코드"] ?? props["ccbaKdcd"] ?? props["kdcd"] ?? ""
-        );
-        const sidoName = String(
-          props["시도명"] ?? props["sido"] ?? props["ccbaCtcdNm"] ?? ""
-        );
-        const name = String(
-          props["국가유산명"] ??
-            props["ccbaMnm1"] ??
-            props["name"] ??
-            ""
-        );
+        const kdcd = String( props["종목코드"] ?? props["ccbaKdcd"] ?? props["kdcd"] ?? "" );
+        const sidoName = String( props["시도명"] ?? props["sido"] ?? props["ccbaCtcdNm"] ?? "" );
+        const name = String( props["국가유산명"] ?? props["ccbaMnm1"] ?? props["name"] ?? "" );
         const ctcd = ctcdBySidoName[sidoName] ?? "";
         const [lon, lat] = toLonLat(evt.coordinate);
 
@@ -501,6 +531,7 @@ const MapComponent: React.FC = () => {
     init();
   }, []);
 
+  // 패널에서 토글될 때만 클러스터/핀 표시 상태 다시 계산
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map) return;
@@ -514,6 +545,7 @@ const MapComponent: React.FC = () => {
     map.renderSync();
   }, [visibleLayers, layersMapRef, mapInstanceRef]);
 
+  // 검색 결과 클릭 시 지도 이동 및 마커 표시
   const handleLocationClick = (coordinates: [number, number]) => {
     if (!mapInstanceRef.current) return;
     const [lon, lat] = coordinates;
@@ -572,13 +604,13 @@ const MapComponent: React.FC = () => {
   };
 
   return (
-  // ✅ 전체 화면: 세로(column)
+  // 전체 화면: 세로
   <div style={{ display: "flex", flexDirection: "column", height: "100vh", width: "100%" }}>
     
-    {/* ✅ 본문 영역: 가로(row) */}
+    {/* 본문 영역: 가로 */}
     <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
       
-      {/* ✅ 좌측 상세 패널 */}
+      {/* 좌측 상세 패널 */}
       <div
         style={{
           width: isDetailPanelOpen ? 320 : 0,
@@ -590,8 +622,8 @@ const MapComponent: React.FC = () => {
           zIndex: 10,
           display: "flex",
           flexDirection: "column",
-          height: "100%",     // ⭐️ 본문 높이 안에서만 꽉 채움
-          flexShrink: 0,
+          height: "100%",
+          flexShrink: 0
         }}
       >
         {/* 헤더(고정) */}
@@ -602,7 +634,7 @@ const MapComponent: React.FC = () => {
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
-            flexShrink: 0,
+            flexShrink: 0
           }}
         >
           <strong style={{ fontSize: 16 }}>상세 정보</strong>
@@ -615,7 +647,7 @@ const MapComponent: React.FC = () => {
               cursor: "pointer",
               color: "#000",
               fontWeight: 700,
-              lineHeight: 1,
+              lineHeight: 1
             }}
             aria-label="닫기"
           >
@@ -629,7 +661,7 @@ const MapComponent: React.FC = () => {
             padding: 14,
             overflowY: "auto",
             flex: 1,
-            minHeight: 0, // ⭐️ flex 스크롤 필수
+            minHeight: 0
           }}
         >
           {detailLoading && (
@@ -668,7 +700,7 @@ const MapComponent: React.FC = () => {
                   style={{
                     width: "100%",
                     borderRadius: 10,
-                    marginBottom: 10,
+                    marginBottom: 10
                   }}
                 />
               )}
@@ -677,7 +709,7 @@ const MapComponent: React.FC = () => {
                 style={{
                   fontSize: 13,
                   lineHeight: 1.6,
-                  whiteSpace: "pre-line",
+                  whiteSpace: "pre-line"
                 }}
               >
                 {selectedDetail.desc || "상세 설명 없음"}
@@ -687,23 +719,21 @@ const MapComponent: React.FC = () => {
         </div>
       </div>
 
-      {/* ✅ 오른쪽 지도 영역 */}
+      {/* 오른쪽 지도 영역 */}
       <div style={{ flex: 1, position: "relative", minHeight: 0 }}>
-        <SearchPanel
-          onLocationClick={handleLocationClick}
+        <SearchPanel 
+          onLocationClick={handleLocationClick} 
           onSearchResults={handleSearchResults}
           mapMode={mapMode}
           onChangeMapMode={setMapMode}
+          admin1Options={admin1Options}
+          selectedAdmin1={selectedAdmin1}
+          onChangeAdmin1={setSelectedAdmin1}
         />
 
         <div
           id="zoom-controls"
-          style={{
-            position: "absolute",
-            top: "20px",
-            right: "20px",
-            zIndex: 1000,
-          }}
+          style={{ position: "absolute", top: "20px", right: "20px", zIndex: 1000 }}
         />
 
         <button
@@ -719,7 +749,7 @@ const MapComponent: React.FC = () => {
             padding: "12px",
             fontSize: "18px",
             cursor: "pointer",
-            boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
+            boxShadow: "0 2px 8px rgba(0,0,0,0.1)"
           }}
           title="레이어 목록"
         >
@@ -734,27 +764,57 @@ const MapComponent: React.FC = () => {
           onClose={() => setIsLayerPanelOpen(false)}
         />
 
-        {/* ⭐️ 지도 div는 부모가 flex:1 / minHeight:0 가져야 함 */}
-        <div ref={mapRef} style={{ width: "100%", height: "100%" }} />
-
-        <img
-          src="/icons/범례.png"
-          alt="범례"
+      {/* 지도 영역(2D: OpenLayers, 3D: Cesium) */}
+      <div
+        style={{
+          width: "100%",
+          height: "100%",
+          flex: 1,
+          position: "relative"
+        }}
+      >
+        {/* 2D 모드: 기존 OpenLayers 캔버스 */}
+        <div
+          ref={mapRef}
           style={{
-            position: "absolute",
-            bottom: "40px",
-            right: "40px",
-            width: "200px",
-            borderRadius: "40px",
-            boxShadow: "0 4px 10px rgba(0,0,0,0.15)",
-            background: "rgba(255,255,255,0.9)",
-            zIndex: 1000,
+            width: "100%",
+            height: "100%",
+            display: mapMode === "2d" ? "block" : "none"
           }}
         />
+
+        {/* 3D 모드: Cesium */}
+        {mapMode === "3d" && (
+          <div
+            style={{
+              position: "absolute",
+              inset: 0
+            }}
+          >
+            <CesiumPage selectedAdmin1={selectedAdmin1} />
+          </div>
+        )}
+      </div>
+
+      {/* 범례 이미지 */}
+      <img
+        src="/icons/범례.png"
+        alt="범례"
+        style={{
+          position: "absolute",
+          bottom: "40px",
+          right: "40px",
+          width: "200px",
+          borderRadius: "40px",
+          boxShadow: "0 4px 10px rgba(0,0,0,0.15)",
+          background: "rgba(255,255,255,0.9)",
+          zIndex: 1000
+        }}
+      />
       </div>
     </div>
 
-    {/* ✅ 전역 Footer: 메인 화면 하단 고정 */}
+    {/* 메인 화면 하단 고정 */}
     <footer>
       <div
         style={{
@@ -763,7 +823,7 @@ const MapComponent: React.FC = () => {
           background: "#7FCBB6",
           display: "flex",
           alignItems: "center",
-          justifyContent: "center",
+          justifyContent: "center"
         }}
       >
         <img
@@ -780,8 +840,7 @@ const MapComponent: React.FC = () => {
     </footer>
     
   </div>
-);
-
+  );
 };
 
 export default MapComponent;
