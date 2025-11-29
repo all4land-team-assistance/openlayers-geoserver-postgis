@@ -1,7 +1,7 @@
 /**
  * 메인 지도 컴포넌트
  * OpenLayers + GeoServer WFS
- * 포인트 클릭 → (목록→상세) → 팝업 렌더 + 클러스터링 + 아이콘(줌 임계)
+ * 포인트 클릭 → (목록→상세) → 좌측 패널 렌더 + 클러스터링 + 아이콘(줌 임계)
  */
 import React, { useEffect, useRef, useState } from "react";
 import OLMap from "ol/Map";
@@ -29,6 +29,7 @@ import Point from "ol/geom/Point";
 import Feature from "ol/Feature";
 import CircleStyle from "ol/style/Circle";
 import Overlay from "ol/Overlay";
+import CesiumPage from "../cesium/CesiumPage";
 
 // 클러스터링/텍스트/아이콘
 import Cluster from "ol/source/Cluster";
@@ -36,7 +37,7 @@ import Text from "ol/style/Text";
 import Icon from "ol/style/Icon";
 
 // 상세 API
-import { findBestDetail, ctcdBySidoName } from "../api/heritage";
+import { findBestDetail, ctcdBySidoName, type Detail } from "../api/heritage";
 
 // ---- 설정값 ----
 const SCALE_CLUSTER = 18000; // 1:18,000보다 멀리서 보면 클러스터
@@ -63,12 +64,17 @@ function getIconByType(rawType?: string): string {
   return "/icons/보물.svg";
 }
 
+// <b> 태그만 제거 (내용은 유지)
+function removeBoldTags(text?: string) {
+  if (!text) return "";
+  return text.replace(/<\/?b>/gi, "");
+}
+
 // 현재 줌 기준 단일 피처 스타일(아이콘/점 전환)
 function makeSinglePointStyle(props: any, map?: OLMap): Style {
   const zoom = map?.getView().getZoom?.() ?? 0;
 
   if (zoom < ICON_ZOOM_THRESHOLD) {
-    // 줌 낮을 때: 단순 점
     return new Style({
       image: new CircleStyle({
         radius: 6,
@@ -78,7 +84,6 @@ function makeSinglePointStyle(props: any, map?: OLMap): Style {
     });
   }
 
-  // 줌 충분: 아이콘
   const type =
     props["종목명"] ??
     props["ccmaName"] ??
@@ -97,11 +102,6 @@ function makeSinglePointStyle(props: any, map?: OLMap): Style {
 }
 
 const MapComponent: React.FC = () => {
-  // 팝업
-  const popupRef = useRef<HTMLDivElement | null>(null);
-  const overlayRef = useRef<Overlay | null>(null);
-  const [popupHtml, setPopupHtml] = useState<string>("");
-
   // 맵/레이어 레지스트리
   const mapRef = useRef<HTMLDivElement>(null);
   const { mapInstanceRef } = useMap();
@@ -137,9 +137,20 @@ const MapComponent: React.FC = () => {
   // 지도 모드 (2D / 3D)
   const [mapMode, setMapMode] = useState<MapMode>("2d");
 
+  // 좌측 상세 패널 상태
+  const [selectedDetail, setSelectedDetail] = useState<Detail | null>(null);
+  const [isDetailPanelOpen, setIsDetailPanelOpen] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+
+  // 3D 지도 선택 시 kr_admin1 name 항목 및 선택 항목 관리
+  const [admin1Options, setAdmin1Options] = useState<string[]>([]);
+  const [selectedAdmin1, setSelectedAdmin1] = useState<string | null>(null);
+
   // 검색 결과 레이어 관리
   const searchResultSourceRef = useRef<VectorSource | null>(null);
-  const searchResultLayerRef = useRef<VectorLayer<VectorSource> | null>(null);
+  const searchResultLayerRef =
+    useRef<VectorLayer<VectorSource> | null>(null);
 
   const handleToggleLayerPanel = () => setIsLayerPanelOpen(!isLayerPanelOpen);
 
@@ -214,6 +225,63 @@ const MapComponent: React.FC = () => {
     }
   };
 
+  const fetchAdmin1Names = async (): Promise<string[]> => {
+    try {
+      const url =
+        `${GEOSERVER_URL}/wfs` +
+        `?service=WFS&version=1.1.0&request=GetFeature` +
+        `&typeName=${WORKSPACE}:kr_admin1` +
+        `&propertyName=name` +
+        `&outputFormat=application/json` +
+        `&srsName=EPSG:4326`;
+
+      if (!res.ok) throw new Error("kr_admin1 WFS 요청 실패");
+      const res = await fetch(url);
+
+      const json = await res.json();
+      const set = new Set<string>();
+
+      for (const f of json.features ?? []) {
+        const n = f.properties?.name;
+        if (n) set.add(String(n));
+      }
+
+      return Array.from(set).sort();
+    } catch (e) {
+      return [];
+      console.error("[fetchAdmin1Names] 실패:", e);
+    }
+  };
+  const restoreViewRef = useRef<{ center: number[]; zoom: number } | null>(null);
+  const isClosingRef = useRef(false);
+  // 지도 튐 방지- 닫기 전에 저장하고 트랜지션 끝난 뒤 복원
+
+
+    const map = mapInstanceRef.current;
+  const closeDetailPanel = () => {
+    if (map) {
+      const view = map.getView();
+        center: view.getCenter() ? [...view.getCenter()!] : fromLonLat([126.978, 37.5665]),
+      restoreViewRef.current = {
+        zoom: view.getZoom() ?? 8,
+      };
+      isClosingRef.current = true;
+      view.cancelAnimations();
+    }
+  };
+    setIsDetailPanelOpen(false);
+
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    if (isDetailPanelOpen) {
+      map.updateSize();
+      const t = setTimeout(() => map.updateSize(), 260);
+      return () => clearTimeout(t);
+    }
+  }, [isDetailPanelOpen]);
+
   useEffect(() => {
     if (!mapRef.current || isMapInitialized.current) return;
     isMapInitialized.current = true;
@@ -223,6 +291,10 @@ const MapComponent: React.FC = () => {
     const init = async () => {
       // 배경지도
       const osmLayer = new TileLayer({ source: new OSM() });
+
+      // kr_admin1 name 목록
+      const adminNames = await fetchAdmin1Names();
+      setAdmin1Options(adminNames);
 
       // 레이어 목록
       const layers = await fetchLayersFromGeoServer();
@@ -261,11 +333,8 @@ const MapComponent: React.FC = () => {
           },
         });
 
-        // :cluster 레이어
-        const clusterSource = new Cluster({
-          distance: 35,
-          source: vectorSource,
-        });
+        // cluster 레이어
+        const clusterSource = new Cluster({ distance: 35, source: vectorSource });
         const clusterLayer = new VectorLayer({
           source: clusterSource,
           visible: false,
@@ -311,7 +380,7 @@ const MapComponent: React.FC = () => {
         });
       });
 
-      // 검색 결과 레이어 생성 (클러스터링 적용)
+      // 검색 결과 레이어
       const searchResultSource = new VectorSource();
       const searchResultClusterSource = new Cluster({
         distance: 40,
@@ -339,18 +408,17 @@ const MapComponent: React.FC = () => {
                 text: String(size),
                 font: "700 14px system-ui, -apple-system, Segoe UI, Roboto",
                 fill: new Fill({ color: "#fff" }),
-                stroke: new Stroke({ color: "rgba(0,0,0,0.35)", width: 3 }),
+                stroke: new Stroke({
+                  color: "rgba(0,0,0,0.35)",
+                  width: 3,
+                }),
               }),
             });
           }
 
           // 단일 마커인 경우
-          const props =
-            clusterFeatures?.[0]?.getProperties() || feature.getProperties();
-          return makeSinglePointStyle(
-            props,
-            mapInstanceRef.current || undefined
-          );
+          const props = clusterFeatures?.[0]?.getProperties() || feature.getProperties();
+          return makeSinglePointStyle( props, mapInstanceRef.current || undefined );
         },
       });
       searchResultSourceRef.current = searchResultSource;
@@ -377,49 +445,11 @@ const MapComponent: React.FC = () => {
           if (pin) pin.setVisible(!useCluster);
           if (cluster) cluster.setVisible(useCluster);
         });
-        // 검색 결과 레이어는 자동으로 스타일이 업데이트되므로 별도 처리 불필요
-        // (레이어의 style 함수가 매번 호출됨)
         map.renderSync();
       };
       map.getView().on("change:resolution", updateClusterVisibility);
       updateClusterVisibility();
 
-      // 팝업 오버레이
-      if (popupRef.current) {
-        overlayRef.current = new Overlay({
-          element: popupRef.current,
-          positioning: "bottom-center",
-          offset: [0, -12],
-          stopEvent: true,
-          autoPan: true,
-          // autoPanAnimation / autoPanMargin 타입 오류가 있어 기본 설정만 사용
-        });
-        map.addOverlay(overlayRef.current);
-      }
-
-      // 팝업 내부 버튼(상세설명 토글/닫기)
-      const onPopupClick = (e: MouseEvent) => {
-        const target = e.target as HTMLElement;
-        if (target?.dataset?.action === "toggle-desc") {
-          const card = popupRef.current!;
-          const desc = card.querySelector(".kh-desc") as HTMLDivElement | null;
-          const btn = card.querySelector(".kh-btn") as HTMLButtonElement | null;
-          if (desc && btn) {
-            const open = desc.style.display !== "none";
-            desc.style.display = open ? "none" : "block";
-            btn.textContent = open ? "상세설명" : "닫기";
-          }
-          return;
-        }
-        if (target?.dataset?.action === "close-card") {
-          setPopupHtml("");
-          overlayRef.current?.setPosition(undefined);
-          return;
-        }
-      };
-      popupRef.current?.addEventListener("click", onPopupClick);
-
-      // 커서 모양만 손가락으로
       const handlePointerMove = (event: { pixel: number[] }) => {
         const features = map.getFeaturesAtPixel(event.pixel);
         const el = map.getTargetElement();
@@ -427,7 +457,7 @@ const MapComponent: React.FC = () => {
       };
       map.on("pointermove", handlePointerMove);
 
-      // 클릭 → (클러스터/핀 구분) → 목록→상세→팝업
+      // 클릭 → 좌측 패널로 상세 표시
       const handleSingleClick = async (evt: any) => {
         let pickedFeature: any = null;
         let pickedLayer: any = null;
@@ -441,20 +471,13 @@ const MapComponent: React.FC = () => {
           return false;
         });
 
-        if (!pickedFeature) {
-          setPopupHtml("");
-          overlayRef.current?.setPosition(undefined);
-          return;
-        }
+        if (!pickedFeature) return;
 
         // 클러스터 클릭 시 동작
-        const layerClass = String(
-          pickedLayer?.get("className") || pickedLayer?.getClassName?.() || ""
-        );
+        const layerClass = String( pickedLayer?.get("className") || pickedLayer?.getClassName?.() || "" );
 
-        // 검색 결과 마커 클릭 시 팝업 표시
+        // 검색 결과 클러스터면 확대만
         if (layerClass.includes("search-results")) {
-          // 클러스터인 경우 확대
           const clusterFeatures = pickedFeature.get("features");
           if (clusterFeatures && clusterFeatures.length > 1) {
             const view = map.getView();
@@ -499,7 +522,6 @@ const MapComponent: React.FC = () => {
         if (layerClass.includes("heritage-cluster")) {
           const members = pickedFeature.get("features") || [];
           if (members.length > 1) {
-            // 여러 개면 확대
             const view = map.getView();
             view.animate({
               zoom: (view.getZoom() || 8) + 1.2,
@@ -508,114 +530,41 @@ const MapComponent: React.FC = () => {
             });
             return;
           }
-          if (members.length === 1) {
-            pickedFeature = members[0]; // 단일 멤버로 이어서 처리
-          }
+          if (members.length === 1) pickedFeature = members[0];
         }
 
         // 상세 조회 파라미터
         const props = pickedFeature.getProperties();
-        const kdcd = String(
-          props["종목코드"] ?? props["ccbaKdcd"] ?? props["kdcd"] ?? ""
-        );
-        const sidoName = String(
-          props["시도명"] ?? props["sido"] ?? props["ccbaCtcdNm"] ?? ""
-        );
-        const name = String(
-          props["국가유산명"] ?? props["ccbaMnm1"] ?? props["name"] ?? ""
-        );
+        const kdcd = String( props["종목코드"] ?? props["ccbaKdcd"] ?? props["kdcd"] ?? "" );
+        const sidoName = String( props["시도명"] ?? props["sido"] ?? props["ccbaCtcdNm"] ?? "" );
+        const name = String( props["국가유산명"] ?? props["ccbaMnm1"] ?? props["name"] ?? "" );
         const ctcd = ctcdBySidoName[sidoName] ?? "";
         const [lon, lat] = toLonLat(evt.coordinate);
 
-        setPopupHtml(
-          `<div style="font-weight:600">상세 정보 불러오는 중…</div>`
-        );
-        overlayRef.current?.setPosition(evt.coordinate);
+        setIsDetailPanelOpen(true);
+        setDetailLoading(true);
+        setDetailError(null);
 
         try {
           const d = await findBestDetail(kdcd, ctcd, name, [lon, lat]);
-
-          // 팝업 카드 (제목/종목/지역/이미지 + 상세설명 버튼)
-          setPopupHtml(`
-            <div class="kh-card" style="
-              position:relative;
-              max-width: 420px;
-              width: 300px;
-              background:#fff;
-              border:1px solid #dcdcdc;
-              border-radius:16px;
-              box-shadow:0 8px 24px rgba(0,0,0,0.18);
-              overflow:hidden;
-            ">
-              <!-- 닫기(X) -->
-              <button class="kh-close" data-action="close-card" aria-label="닫기" style="
-                position:absolute; top:8px; right:8px;
-                width:28px; height:28px;
-                border:1px solid #e5e7eb; background:#fff; color:#333;
-                font-size:20px; border-radius:9999px;
-                display:flex; align-items:center; justify-content:center;
-                cursor:pointer; box-shadow:0 1px 2px rgba(0,0,0,0.06);
-              ">&times;</button>
-
-              <div style="padding:14px 16px 0 16px;">
-                <div class="kh-title" style="
-                  font-weight:800; font-size:18px; color:#111;
-                  letter-spacing:-0.2px; line-height:1.25; margin:0 0 6px 0;
-                ">${d.title || "(이름 없음)"}</div>
-
-                <div class="kh-meta" style="
-                  color:#666; font-size:13px; line-height:1.3; margin-bottom:10px;
-                ">
-                  ${[d.kind, d.sido].filter(Boolean).join(" / ")}
-                </div>
-              </div>
-
-              ${
-                d.image
-                  ? `
-                <div style="padding:0 16px 8px 16px;">
-                  <img class="kh-img" src="${d.image}" alt=""
-                       style="display:block;width:100%;border-radius:10px;" />
-                </div>`
-                  : ""
-              }
-
-              <div style="padding:0 16px 16px 16px;">
-                <button class="kh-btn" data-action="toggle-desc" style="
-                  display:inline-block; border:1px solid #1f6feb; background:#1f6feb;
-                  color:#fff; font-weight:600; font-size:13px; padding:8px 12px;
-                  border-radius:8px; cursor:pointer;
-                ">상세설명</button>
-
-                <div class="kh-desc" style="
-                  display:none; color:#333; font-size:13px; line-height:1.55;
-                  margin-top:12px; white-space:pre-line;
-                ">${d.desc || "상세 설명 없음"}</div>
-              </div>
-            </div>
-          `);
-          overlayRef.current?.setPosition(evt.coordinate);
+          setSelectedDetail(d);
         } catch (e: any) {
-          setPopupHtml(
-            `<div style="color:#c00">상세 조회 실패: ${
-              e?.message || "오류"
-            }</div>`
-          );
-          overlayRef.current?.setPosition(evt.coordinate);
+          setSelectedDetail(null);
+          setDetailError(e?.message || "상세 조회 실패");
+        } finally {
+          setDetailLoading(false);
         }
       };
       map.on("singleclick", handleSingleClick);
 
-      // 빈 곳 클릭 → 팝업 닫기
       const onPointerDown = (e: any) => {
+        // 빈 곳 클릭 시 패널 닫음
         if (!map.hasFeatureAtPixel(e.pixel as any)) {
-          setPopupHtml("");
-          overlayRef.current?.setPosition(undefined);
+          setIsDetailPanelOpen(false);
         }
       };
       map.on("pointerdown" as any, onPointerDown);
 
-      // 상태 반영
       setAvailableLayers(layers);
 
       // 레이어 목록에서 지역명 추출하여 소재지 목록 생성
@@ -623,13 +572,11 @@ const MapComponent: React.FC = () => {
       setLocationList(locations);
       setVisibleLayers(new Set());
 
-      // 정리
       return () => {
         map.getView().un("change:resolution" as any, updateClusterVisibility);
         map.un("pointermove" as any, handlePointerMove);
         map.un("singleclick" as any, handleSingleClick);
         map.un("pointerdown" as any, onPointerDown);
-        popupRef.current?.removeEventListener("click", onPopupClick);
 
         if (mapInstanceRef.current) {
           mapInstanceRef.current.getLayers().clear();
@@ -643,7 +590,7 @@ const MapComponent: React.FC = () => {
     };
 
     init();
-  }, []); // 최초 1회만 초기화
+  }, []);
 
   // 패널에서 토글될 때만 클러스터/핀 표시 상태 다시 계산
   useEffect(() => {
@@ -662,13 +609,12 @@ const MapComponent: React.FC = () => {
   // 검색 결과 클릭 시 지도 이동 및 마커 표시
   const handleLocationClick = (coordinates: [number, number]) => {
     if (!mapInstanceRef.current) return;
-
     const [lon, lat] = coordinates;
     const view = mapInstanceRef.current.getView();
-
+    
     // 좌표를 OpenLayers 좌표계로 변환 (EPSG:3857)
     const center = fromLonLat([lon, lat]);
-
+    
     // 지도 중심 이동 및 줌 조정
     view.animate({
       center: center,
@@ -677,25 +623,18 @@ const MapComponent: React.FC = () => {
     });
   };
 
-  // 검색 결과를 지도에 마커로 표시 (성능 최적화)
   const handleSearchResults = (results: SearchResultItem[]) => {
     if (!searchResultSourceRef.current || !mapInstanceRef.current) return;
-
-    // 기존 검색 결과 제거
     searchResultSourceRef.current.clear();
 
-    // 검색 결과 개수 제한 (너무 많으면 성능 저하)
     const maxResults = 500;
     const limitedResults = results.slice(0, maxResults);
 
-    // 배치로 마커 추가 (성능 최적화)
     const features: Feature[] = [];
-
     limitedResults.forEach((item) => {
       try {
         let coordinates: [number, number] | null = null;
 
-        // 방법 1: 직접 추출된 lat, lon 사용 (POINT의 경우)
         if (
           item.lat !== null &&
           item.lat !== undefined &&
@@ -703,11 +642,8 @@ const MapComponent: React.FC = () => {
           item.lon !== undefined
         ) {
           coordinates = [Number(item.lon), Number(item.lat)];
-        }
-        // 방법 2: geom_json에서 좌표 추출 (GeoJSON 형식)
-        else if (item.geom_json) {
+        } else if (item.geom_json) {
           const geomJson = item.geom_json;
-
           if (geomJson.type === "Point") {
             coordinates = [geomJson.coordinates[0], geomJson.coordinates[1]];
           } else if (
@@ -737,7 +673,7 @@ const MapComponent: React.FC = () => {
           const point = new Point(fromLonLat([lon, lat]));
           const feature = new Feature({
             geometry: point,
-            ...item, // 모든 검색 결과 데이터를 속성으로 저장
+            ...item,
           });
           features.push(feature);
         }
@@ -746,9 +682,9 @@ const MapComponent: React.FC = () => {
       }
     });
 
-    // 한 번에 모든 피처 추가 (성능 최적화)
     if (features.length > 0) {
       searchResultSourceRef.current.addFeatures(features);
+      setTimeout(() => mapInstanceRef.current?.renderSync(), 0);
 
       // 지도 업데이트는 한 번만
       setTimeout(() => {
@@ -760,6 +696,56 @@ const MapComponent: React.FC = () => {
   };
 
   return (
+  // 전체 화면: 세로
+  <div style={{ display: "flex", flexDirection: "column", height: "100vh", width: "100%" }}>
+    
+    {/* 본문 영역: 가로 */}
+    <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
+      
+      {/* 좌측 상세 패널 */}
+      <div
+        style={{
+          width: isDetailPanelOpen ? 320 : 0,
+          transition: "width 0.25s ease",
+          overflow: "hidden",
+          borderRight: isDetailPanelOpen ? "1px solid #e5e7eb" : "none",
+          background: "#fff",
+          color: "#000",
+          zIndex: 10,
+          display: "flex",
+          flexDirection: "column",
+          height: "100%",
+          flexShrink: 0
+        }}
+      >
+        {/* 헤더(고정) */}
+        <div
+          style={{
+            padding: "12px 14px",
+            borderBottom: "1px solid #eee",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            flexShrink: 0
+          }}
+        >
+          <strong style={{ fontSize: 16 }}>상세 정보</strong>
+          <button
+            onClick={closeDetailPanel}
+            style={{
+              border: "none",
+              background: "transparent",
+              fontSize: 20,
+              cursor: "pointer",
+              color: "#000",
+              fontWeight: 700,
+              lineHeight: 1
+            }}
+            aria-label="닫기"
+          >
+            ×
+          </button>
+        </div>
     <div
       style={{
         display: "flex",
@@ -776,14 +762,119 @@ const MapComponent: React.FC = () => {
         onChangeMapMode={setMapMode}
       />
 
+        {/* 본문(스크롤 영역) */}
+        <div
+          style={{
+            padding: 14,
+            overflowY: "auto",
+            flex: 1,
+            minHeight: 0
+          }}
+        >
+          {detailLoading && (
+            <div style={{ color: "#666", fontSize: 14 }}>
+              상세 정보 불러오는 중…
+            </div>
+          )}
+
+          {detailError && (
+            <div style={{ color: "#c00", fontSize: 14 }}>
+              상세 조회 실패: {detailError}
+            </div>
+          )}
+
+          {!detailLoading && !detailError && !selectedDetail && (
+            <div style={{ color: "#666", fontSize: 14 }}>
+              지도에서 문화유산을 선택하세요.
+            </div>
+          )}
+
+          {!detailLoading && !detailError && selectedDetail && (
+            <div>
+              <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 6 }}>
+                {selectedDetail.title}
+              </div>
+              <div style={{ color: "#666", fontSize: 13, marginBottom: 10 }}>
+                {[selectedDetail.kind, selectedDetail.sido]
+                  .filter(Boolean)
+                  .join(" / ")}
+              </div>
+
+              {selectedDetail.image && (
+                <img
+                  src={selectedDetail.image}
+                  alt=""
+                  style={{
+                    width: "100%",
+                    borderRadius: 10,
+                    marginBottom: 10
+                  }}
+                />
+              )}
+
+              <div
+                style={{
+                  fontSize: 13,
+                  lineHeight: 1.6,
+                  whiteSpace: "pre-line"
+                }}
+              >
+                {selectedDetail.desc || "상세 설명 없음"}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* 오른쪽 지도 영역 */}
+      <div style={{ flex: 1, position: "relative", minHeight: 0 }}>
+        <SearchPanel 
+          onLocationClick={handleLocationClick} 
+          onSearchResults={handleSearchResults}
+          mapMode={mapMode}
+          onChangeMapMode={setMapMode}
+          admin1Options={admin1Options}
+          selectedAdmin1={selectedAdmin1}
+          onChangeAdmin1={setSelectedAdmin1}
+        />
+
+        <div
+          id="zoom-controls"
+          style={{ position: "absolute", top: "20px", right: "20px", zIndex: 1000 }}
+        />
+
+        <button
+          onClick={handleToggleLayerPanel}
+          style={{
+            position: "absolute",
+            top: "80px",
+            right: "20px",
+            zIndex: 1000,
+            background: "rgba(255, 255, 255, 0.9)",
+            border: "1px solid #ddd",
+            borderRadius: "8px",
+            padding: "12px",
+            fontSize: "18px",
+            cursor: "pointer",
+            boxShadow: "0 2px 8px rgba(0,0,0,0.1)"
+          }}
+          title="레이어 목록"
+        >
+          ☰
+        </button>
+
+        <LayerPanel
+          isOpen={isLayerPanelOpen}
+          layers={availableLayers}
+          visibleLayers={visibleLayers}
+          onToggleLayer={handleToggleLayer}
+          onClose={() => setIsLayerPanelOpen(false)}
+        />
+
+      {/* 지도 영역(2D: OpenLayers, 3D: Cesium) */}
       <div
         id="zoom-controls"
-        style={{
-          position: "absolute",
-          top: "20px",
-          right: "20px",
-          zIndex: 1000,
-        }}
+        style={{ position: "absolute", top: "20px", right: "20px", zIndex: 1000 }}
       />
 
       <button
@@ -801,18 +892,29 @@ const MapComponent: React.FC = () => {
           cursor: "pointer",
           boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
         }}
-        title="레이어 목록"
       >
-        ☰
-      </button>
+        {/* 2D 모드: 기존 OpenLayers 캔버스 */}
+        <div
+          ref={mapRef}
+          style={{
+            width: "100%",
+            height: "100%",
+            display: mapMode === "2d" ? "block" : "none"
+          }}
+        />
 
-      <LayerPanel
-        isOpen={isLayerPanelOpen}
-        layers={availableLayers}
-        visibleLayers={visibleLayers}
-        onToggleLayer={handleToggleLayer}
-        onClose={() => setIsLayerPanelOpen(false)}
-      />
+        {/* 3D 모드: Cesium */}
+        {mapMode === "3d" && (
+          <div
+            style={{
+              position: "absolute",
+              inset: 0
+            }}
+          >
+            <CesiumPage selectedAdmin1={selectedAdmin1} />
+          </div>
+        )}
+      </div>
 
       {/* 지도 영역 (현재는 2D OpenLayers만 사용) */}
       <div ref={mapRef} style={{ width: "100%", height: "100%", flex: 1 }} />
@@ -822,38 +924,44 @@ const MapComponent: React.FC = () => {
         alt="범례"
         style={{
           position: "absolute",
-          bottom: "40px", // 지도 하단에서 40px 위
-          right: "40px", // 지도 오른쪽에서 40px 왼쪽 (적당히 조정 가능)
-          width: "200px", // 이미지 크기 (원하는 대로 조정)
+          bottom: "40px",
+          right: "40px",
+          width: "200px",
           borderRadius: "40px",
           boxShadow: "0 4px 10px rgba(0,0,0,0.15)",
           background: "rgba(255,255,255,0.9)",
-          zIndex: 1000,
+          zIndex: 1000
         }}
       />
-
-      {/* 팝업 오버레이 DOM */}
-      <div
-        ref={popupRef}
-        style={{
-          position: "absolute",
-          transform: "translate(-50%, -100%)",
-          background: "#fff",
-          border: "1px solid #ccc",
-          borderRadius: 12,
-          padding: 12,
-          minWidth: 260,
-          maxWidth: 360,
-          maxHeight: "40vh",
-          overflowY: "auto",
-          lineHeight: 1.5,
-          boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
-          display: popupHtml ? "block" : "none",
-          zIndex: 1001,
-        }}
-        dangerouslySetInnerHTML={{ __html: popupHtml }}
-      />
+      </div>
     </div>
+
+    {/* 메인 화면 하단 고정 */}
+    <footer>
+      <div
+        style={{
+          width: "100%",
+          height: 80,
+          background: "#7FCBB6",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center"
+        }}
+      >
+        <img
+          src="/icons/Logo.png"
+          alt="로고"
+          style={{
+            height: 42,
+            cursor: "pointer",
+            userSelect: "none",
+          }}
+          onClick={() => window.location.reload()}
+        />
+      </div>
+    </footer>
+    
+  </div>
   );
 };
 

@@ -17,6 +17,9 @@ const SearchPanel: React.FC<SearchPanelProps> = ({
   onSearchResults,
   mapMode = "2d",
   onChangeMapMode,
+  admin1Options,
+  selectedAdmin1,
+  onChangeAdmin1,
   locationList = [],
 }) => {
   const [isOpen, setIsOpen] = useState(true);
@@ -361,6 +364,37 @@ const SearchPanel: React.FC<SearchPanelProps> = ({
             </button>
           </div>
         </div>
+        {/* 3D 모드 전용 kr_admin1 선택 (광역 행정구역) */}
+        {mapMode === "3d" && (
+          <div className={styles.mapToggleContainer}>
+            <div style={{ marginBottom: "24px" }}>
+              <label className={commonStyles.formLabel}>3D 행정구역(광역)</label>
+              <select
+                value={selectedAdmin1 ?? ""}
+                onChange={(e) =>
+                  onChangeAdmin1 && onChangeAdmin1(e.target.value || null)
+                }
+                className={`${styles.select} ${commonStyles.inputField}`}
+                onFocus={(e) => {
+                  e.currentTarget.style.borderColor = "#3b82f6";
+                  e.currentTarget.style.boxShadow =
+                    "0 0 0 3px rgba(59, 130, 246, 0.1)";
+                }}
+                onBlur={(e) => {
+                  e.currentTarget.style.borderColor = "#e2e8f0";
+                  e.currentTarget.style.boxShadow = "none";
+                }}
+              >
+                <option value="">행정구역 선택</option>
+                {admin1Options?.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        )}
       </div>
     </>
   );

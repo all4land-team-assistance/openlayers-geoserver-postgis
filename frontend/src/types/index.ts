@@ -59,6 +59,9 @@ export interface SearchPanelProps {
   onSearchResults?: (results: SearchResultItem[]) => void;
   mapMode?: MapMode;
   onChangeMapMode?: (mode: MapMode) => void;
+  admin1Options?: string[];
+  selectedAdmin1?: string | null;
+  onChangeAdmin1?: (value: string | null) => void;
   locationList?: string[];
 }
 
