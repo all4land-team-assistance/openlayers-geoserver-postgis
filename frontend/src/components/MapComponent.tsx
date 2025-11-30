@@ -793,12 +793,12 @@ const MapComponent: React.FC = () => {
           <div
             style={{
               position: "absolute",
-              inset: 0
+              inset: 0,
             }}
           >
             <CesiumPage
               selectedAdmin1={selectedAdmin1}
-               onChangeAdmin3DMode={setAdmin3DMode}
+              admin3DMode={admin3DMode}
             />
           </div>
         )}
@@ -816,7 +816,7 @@ const MapComponent: React.FC = () => {
           borderRadius: "40px",
           boxShadow: "0 4px 10px rgba(0,0,0,0.15)",
           background: "rgba(255,255,255,0.9)",
-          zIndex: 1000
+          zIndex: 1000,
         }}
       />
       </div>

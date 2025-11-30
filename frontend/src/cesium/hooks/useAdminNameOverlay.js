@@ -5,7 +5,7 @@ import * as Cesium from "cesium";
  * - 배경 없음, 글자만 보이도록 처리
  * - viewer.scene.postRender 에서 화면 좌표 갱신
  */
-export function createAdminNameOverlay(viewer) {
+export function createAdminNameOverlay(viewer, defaultFontSizePx = 35) {
   const containerId = "admin-name-layer";
   const styleId = "admin-name-style";
   const scratch = new Cesium.Cartesian2();
@@ -25,7 +25,9 @@ export function createAdminNameOverlay(viewer) {
 
       .admin-name-label {
         position: absolute;
-        font: 700 35px 'Noto Sans KR', system-ui, sans-serif;
+        font-weight: 700;
+        font-family: 'Noto Sans KR', system-ui, sans-serif;
+        font-size: 35px;
         color: #ffffff;
         white-space: nowrap;
         pointer-events: none;
@@ -72,13 +74,27 @@ export function createAdminNameOverlay(viewer) {
     el.style.top = `${top}px`;
   }
 
-  function show(worldPosition, text) {
+  /**
+   * worldPosition: Cartesian3
+   * text: string
+   * fontSizePx: number | undefined
+   *   - 전달하면 해당 px로 글자 크기 설정
+   *   - 전달하지 않으면 defaultFontSizePx 사용
+   */
+  function show(worldPosition, text, fontSizePx) {
     clear();
     if (!worldPosition) return;
 
     const el = document.createElement("div");
     el.className = "admin-name-label";
     el.textContent = text ?? "";
+
+    const size =
+      typeof fontSizePx === "number" && fontSizePx > 0
+        ? fontSizePx
+        : defaultFontSizePx;
+    el.style.fontSize = `${size}px`;
+
     layer.appendChild(el);
 
     record = { el, world: worldPosition };
