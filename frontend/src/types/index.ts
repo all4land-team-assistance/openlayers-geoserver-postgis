@@ -52,6 +52,9 @@ export interface SearchResults {
 // 지도 모드
 export type MapMode = "2d" | "3d";
 
+// 밀집도, 3D 모델 확인 버튼
+export type Admin3DMode = "density" | "model";
+
 // 검색 패널 Props
 export interface SearchPanelProps {
   onSearch?: (searchParams: SearchParams) => void;
@@ -62,6 +65,8 @@ export interface SearchPanelProps {
   admin1Options?: string[];
   selectedAdmin1?: string | null;
   onChangeAdmin1?: (value: string | null) => void;
+  admin3DMode?: Admin3DMode | null;
+  onChangeAdmin3DMode?: (mode: Admin3DMode | null) => void;
 }
 
 // 맵 인스턴스 및 레이어 맵
