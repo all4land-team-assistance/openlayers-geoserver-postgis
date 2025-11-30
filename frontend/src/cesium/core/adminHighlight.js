@@ -10,7 +10,7 @@ export function styleAndFlyToAdmin1(options) {
     minAreaM2 = 0,      // m^2 기준 최소 면적. 0이면 전체 사용
   } = options || {};
 
-  if (!viewer || !dataSource) return { labelEntity: null };
+  if (!viewer || !dataSource) return { labelPosition: null };
 
   const color = Cesium.Color.fromCssColorString("#2563eb").withAlpha(0.6);
   const entities = dataSource.entities.values;
@@ -18,7 +18,7 @@ export function styleAndFlyToAdmin1(options) {
 
   const bigPositions = [];
 
-  // 1) 큰 폴리곤만 추려서 extrude + 스타일 적용
+  // 큰 폴리곤만 extrude
   for (let i = 0; i < entities.length; i++) {
     const e = entities[i];
     const poly = e.polygon;
@@ -57,12 +57,11 @@ export function styleAndFlyToAdmin1(options) {
   }
 
   if (bigPositions.length === 0) {
-    return { labelEntity: null };
+    return { labelPosition: null };
   }
 
-  // 2) 큰 폴리곤들로 바운딩 스피어 계산
   const bs = Cesium.BoundingSphere.fromPoints(bigPositions);
-  let labelEntity = null;
+  let labelPosition = null;
 
   if (bs && bs.radius > 0 && Cesium.defined(bs.center)) {
     // 카메라 이동
@@ -75,35 +74,18 @@ export function styleAndFlyToAdmin1(options) {
       ),
     });
 
-    // 3) 중심점 위에 라벨 하나 올리기
+    // 중심 Cartographic → extrudedHeight 위쪽의 Cartesian3
     const centerCarto = Cesium.Cartographic.fromCartesian(bs.center);
+    const labelHeight = extrudedHeight + 1000.0;
 
-    // 폴리곤 윗면보다 충분히 띄워서 시각적으로 위에 보이게
-    const labelHeight = extrudedHeight * 2.0;
-
-    const labelPos = Cesium.Cartesian3.fromRadians(
+    labelPosition = Cesium.Cartesian3.fromRadians(
       centerCarto.longitude,
       centerCarto.latitude,
       labelHeight,
     );
-
-    labelEntity = viewer.entities.add({
-      position: labelPos,
-      label: {
-        text: name,
-        font: "700 40px 'Noto Sans KR', sans-serif",  // 글자 크기/폰트
-        fillColor: Cesium.Color.WHITE,
-        outlineColor: Cesium.Color.BLACK,
-        outlineWidth: 4,
-        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-        verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-        pixelOffset: new Cesium.Cartesian2(0, -10),
-        disableDepthTestDistance: Number.POSITIVE_INFINITY,
-      },
-    });
   }
 
-  return { labelEntity };
+  return { labelPosition };
 }
 
 // Cartesian3 배열로 된 폴리곤 면적을 m^2 단위로 근사 계산
