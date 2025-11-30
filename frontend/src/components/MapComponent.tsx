@@ -19,7 +19,7 @@ import LayerPanel from "./LayerPanel";
 import { GEOSERVER_URL, WORKSPACE, LAYER_STYLE } from "../config/constants";
 import { useMap } from "../hooks/useMap";
 import { useLayers } from "../hooks/useLayers";
-import type { LayerInfo, SearchResultItem, MapMode } from "../types";
+import type { LayerInfo, SearchResultItem, MapMode, Admin3DMode, } from "../types";
 import Point from "ol/geom/Point";
 import Feature from "ol/Feature";
 import CircleStyle from "ol/style/Circle";
@@ -120,6 +120,9 @@ const MapComponent: React.FC = () => {
   // 3D 지도 선택 시 kr_admin1 name 항목 및 선택 항목 관리
   const [admin1Options, setAdmin1Options] = useState<string[]>([]);
   const [selectedAdmin1, setSelectedAdmin1] = useState<string | null>(null);
+
+  // 3D 행정구역 표현 모드 (밀집도 / 3D 모델)
+  const [admin3DMode, setAdmin3DMode] = useState<Admin3DMode | null>(null);
 
   // 검색 결과 레이어 관리
   const searchResultSourceRef = useRef<VectorSource | null>(null);
@@ -729,6 +732,8 @@ const MapComponent: React.FC = () => {
           admin1Options={admin1Options}
           selectedAdmin1={selectedAdmin1}
           onChangeAdmin1={setSelectedAdmin1}
+          admin3DMode={admin3DMode}
+          onChangeAdmin3DMode={setAdmin3DMode}
         />
 
         <div
@@ -791,7 +796,10 @@ const MapComponent: React.FC = () => {
               inset: 0
             }}
           >
-            <CesiumPage selectedAdmin1={selectedAdmin1} />
+            <CesiumPage
+              selectedAdmin1={selectedAdmin1}
+               onChangeAdmin3DMode={setAdmin3DMode}
+            />
           </div>
         )}
       </div>
