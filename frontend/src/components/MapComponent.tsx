@@ -130,6 +130,26 @@ const MapComponent: React.FC = () => {
 
   const handleToggleLayerPanel = () => setIsLayerPanelOpen(!isLayerPanelOpen);
 
+  // 레이어 표시/숨김 헬퍼 함수
+  const toggleLayerVisibility = (baseName: string, turnOn: boolean) => {
+    const pin = layersMapRef.current.get(baseName + ":pin");
+    const cluster = layersMapRef.current.get(baseName + ":cluster");
+
+    if (turnOn) {
+      if (mapInstanceRef.current) {
+        const useCluster =
+          resolutionToScale(mapInstanceRef.current) > SCALE_CLUSTER;
+        if (pin) pin.setVisible(!useCluster);
+        if (cluster) cluster.setVisible(useCluster);
+      } else {
+        if (pin) pin.setVisible(true);
+      }
+    } else {
+      if (pin) pin.setVisible(false);
+      if (cluster) cluster.setVisible(false);
+    }
+  };
+
   // 레이어 그룹 토글 시 해당 그룹의 모든 레이어를 토글 (유형별/소재지별)
   const handleToggleLayer = (groupName: string) => {
     const next = new Set(visibleLayers);
@@ -147,22 +167,7 @@ const MapComponent: React.FC = () => {
         if (parts.length >= 2) {
           const layerType = parts[parts.length - 1];
           if (CATEGORY_MAP[layerType] === koreanType) {
-            const pin = layersMapRef.current.get(baseName + ":pin");
-            const cluster = layersMapRef.current.get(baseName + ":cluster");
-
-            if (turnOn) {
-              if (mapInstanceRef.current) {
-                const useCluster =
-                  resolutionToScale(mapInstanceRef.current) > SCALE_CLUSTER;
-                if (pin) pin.setVisible(!useCluster);
-                if (cluster) cluster.setVisible(useCluster);
-              } else {
-                if (pin) pin.setVisible(true);
-              }
-            } else {
-              if (pin) pin.setVisible(false);
-              if (cluster) cluster.setVisible(false);
-            }
+            toggleLayerVisibility(baseName, turnOn);
           }
         }
       });
@@ -178,8 +183,6 @@ const MapComponent: React.FC = () => {
         if (parts.length >= 2) {
           const layerRegion = parts[0];
           const layerType = parts[parts.length - 1];
-
-          // 해당 지역의 레이어이고, 유형이 국보/민속/사적/보물인 경우
           const regionKorean = CITY_NAME_MAP[layerRegion] || layerRegion;
           const typeKorean = CATEGORY_MAP[layerType];
 
@@ -188,22 +191,7 @@ const MapComponent: React.FC = () => {
             typeKorean &&
             TARGET_LAYER_GROUPS.includes(typeKorean)
           ) {
-            const pin = layersMapRef.current.get(baseName + ":pin");
-            const cluster = layersMapRef.current.get(baseName + ":cluster");
-
-            if (turnOn) {
-              if (mapInstanceRef.current) {
-                const useCluster =
-                  resolutionToScale(mapInstanceRef.current) > SCALE_CLUSTER;
-                if (pin) pin.setVisible(!useCluster);
-                if (cluster) cluster.setVisible(useCluster);
-              } else {
-                if (pin) pin.setVisible(true);
-              }
-            } else {
-              if (pin) pin.setVisible(false);
-              if (cluster) cluster.setVisible(false);
-            }
+            toggleLayerVisibility(baseName, turnOn);
           }
         }
       });
@@ -227,7 +215,7 @@ const MapComponent: React.FC = () => {
       );
       const text = await response.text();
       const xml = new DOMParser().parseFromString(text, "text/xml");
-      
+
       // LayerGroup 또는 Layer 요소 찾기
       const layers = xml.getElementsByTagName("Layer");
       const groups: LayerInfo[] = [];
@@ -238,8 +226,13 @@ const MapComponent: React.FC = () => {
         const nameElement = layer.getElementsByTagName("Name")[0];
         if (!nameElement) continue;
 
-        const groupName = nameElement.textContent || "";
-        
+        const fullName = nameElement.textContent || "";
+
+        // WORKSPACE 접두사 제거 (예: "sbsj:Kookbo_Group" → "Kookbo_Group")
+        const groupName = fullName.startsWith(`${WORKSPACE}:`)
+          ? fullName.split(":")[1]
+          : fullName;
+
         // 레이어 그룹 이름 확인 (예: "Kookbo_Group", "Treasure_Group" 등)
         if (LAYER_GROUP_NAME_MAP[groupName] && !foundGroups.has(groupName)) {
           foundGroups.add(groupName);
@@ -275,14 +268,16 @@ const MapComponent: React.FC = () => {
   };
 
   // 레이어 이름 파싱 헬퍼 함수
-  const parseLayerName = (fullName: string): { layerName: string; regionName: string; type: string } | null => {
+  const parseLayerName = (
+    fullName: string
+  ): { layerName: string; regionName: string; type: string } | null => {
     if (!fullName.startsWith(`${WORKSPACE}:`)) return null;
-    
+
     const layerName = fullName.split(":")[1];
     const parts = layerName.split("_");
-    
+
     if (parts.length < 2) return null;
-    
+
     return {
       layerName,
       regionName: parts[0],
@@ -291,7 +286,9 @@ const MapComponent: React.FC = () => {
   };
 
   // 소재지별로 그룹화
-  const fetchLocationGroupsFromGeoServer = async (featureTypes: Element[]): Promise<LayerInfo[]> => {
+  const fetchLocationGroupsFromGeoServer = async (
+    featureTypes: Element[]
+  ): Promise<LayerInfo[]> => {
     try {
       const locationSet = new Set<string>();
 
@@ -305,7 +302,8 @@ const MapComponent: React.FC = () => {
 
         const koreanType = CATEGORY_MAP[parsed.type] || null;
         if (koreanType && TARGET_LAYER_GROUPS.includes(koreanType)) {
-          const koreanLocation = CITY_NAME_MAP[parsed.regionName] || parsed.regionName;
+          const koreanLocation =
+            CITY_NAME_MAP[parsed.regionName] || parsed.regionName;
           locationSet.add(koreanLocation);
         }
       }
@@ -331,11 +329,6 @@ const MapComponent: React.FC = () => {
       console.error("GeoServer 소재지별 레이어 그룹 목록 로딩 실패:", e);
       return [];
     }
-  };
-
-  // 유형별 레이어 그룹 가져오기 (WMS에서 레이어 그룹 직접 사용)
-  const fetchLayerGroupsFromGeoServer = async (): Promise<LayerInfo[]> => {
-    return await fetchLayerGroupsFromWMS();
   };
 
   const fetchAdmin1Names = async (): Promise<string[]> => {
@@ -387,6 +380,8 @@ const MapComponent: React.FC = () => {
 
     layersMapRef.current.clear();
 
+    let cleanup: (() => void) | null = null;
+
     const init = async () => {
       // 배경지도
       const osmLayer = new TileLayer({ source: new OSM() });
@@ -400,7 +395,7 @@ const MapComponent: React.FC = () => {
 
       // 레이어 그룹 목록 가져오기 (유형별은 WMS에서 레이어 그룹 직접 사용, 소재지별은 레이어 이름 파싱)
       const [typeGroups, locationGroups] = await Promise.all([
-        fetchLayerGroupsFromGeoServer(),
+        fetchLayerGroupsFromWMS(),
         fetchLocationGroupsFromGeoServer(featureTypes),
       ]);
 
@@ -422,85 +417,84 @@ const MapComponent: React.FC = () => {
         if (koreanType && TARGET_LAYER_GROUPS.includes(koreanType)) {
           const layerName = parsed.layerName;
           const vectorSource = new VectorSource({
-              url: `${GEOSERVER_URL}/wfs?service=WFS&version=1.1.0&request=GetFeature&typeName=${WORKSPACE}:${layerName}&outputFormat=application/json&srsName=EPSG:4326`,
-              format: new GeoJSON({
-                dataProjection: "EPSG:4326",
-                featureProjection: "EPSG:3857",
-              }),
-            });
+            url: `${GEOSERVER_URL}/wfs?service=WFS&version=1.1.0&request=GetFeature&typeName=${WORKSPACE}:${layerName}&outputFormat=application/json&srsName=EPSG:4326`,
+            format: new GeoJSON({
+              dataProjection: "EPSG:4326",
+              featureProjection: "EPSG:3857",
+            }),
+          });
 
-            // :pin 레이어 (포인트는 아이콘/점 전환)
-            const pinLayer = new VectorLayer({
-              source: vectorSource,
-              visible: false,
-              className: "heritage-pin",
-              style: (feature) => {
-                const g: any = feature.getGeometry?.();
-                const t = g?.getType?.();
-                if (t === "Point" || t === "MultiPoint") {
-                  const props = feature.getProperties?.() || {};
-                  return makeSinglePointStyle(
-                    props,
-                    mapInstanceRef.current || undefined
-                  );
-                }
-                // 라인/폴리곤
-                return new Style({
-                  fill: new Fill({ color: "rgba(255,123,0,0.3)" }),
-                  stroke: new Stroke({ color: "#ff7b00", width: 2 }),
-                });
-              },
-            });
+          // :pin 레이어 (포인트는 아이콘/점 전환)
+          const pinLayer = new VectorLayer({
+            source: vectorSource,
+            visible: false,
+            className: "heritage-pin",
+            style: (feature) => {
+              const g: any = feature.getGeometry?.();
+              const t = g?.getType?.();
+              if (t === "Point" || t === "MultiPoint") {
+                const props = feature.getProperties?.() || {};
+                return makeSinglePointStyle(
+                  props,
+                  mapInstanceRef.current || undefined
+                );
+              }
+              // 라인/폴리곤
+              return new Style({
+                fill: new Fill({ color: "rgba(255,123,0,0.3)" }),
+                stroke: new Stroke({ color: "#ff7b00", width: 2 }),
+              });
+            },
+          });
 
-            // cluster 레이어
-            const clusterSource = new Cluster({
-              distance: 35,
-              source: vectorSource,
-            });
-            const clusterLayer = new VectorLayer({
-              source: clusterSource,
-              visible: false,
-              className: "heritage-cluster",
-              style: (feature) => {
-                const members = feature.get("features") || [];
-                const size = members.length;
+          // cluster 레이어
+          const clusterSource = new Cluster({
+            distance: 35,
+            source: vectorSource,
+          });
+          const clusterLayer = new VectorLayer({
+            source: clusterSource,
+            visible: false,
+            className: "heritage-cluster",
+            style: (feature) => {
+              const members = feature.get("features") || [];
+              const size = members.length;
 
-                // 단일일 때도 줌에 따라 아이콘/점 전환
-                if (size === 1) {
-                  const inner = members[0];
-                  const props = inner.getProperties?.() || {};
-                  return makeSinglePointStyle(
-                    props,
-                    mapInstanceRef.current || undefined
-                  );
-                }
+              // 단일일 때도 줌에 따라 아이콘/점 전환
+              if (size === 1) {
+                const inner = members[0];
+                const props = inner.getProperties?.() || {};
+                return makeSinglePointStyle(
+                  props,
+                  mapInstanceRef.current || undefined
+                );
+              }
 
-                // 다중 클러스터: 숫자 원형
-                const r = Math.max(18, Math.min(44, 12 + Math.log(size) * 10));
-                return new Style({
-                  image: new CircleStyle({
-                    radius: r,
-                    fill: new Fill({ color: "rgba(33,150,243,0.9)" }),
-                    stroke: new Stroke({ color: "#0b3d91", width: 2 }),
-                  }),
-                  text: new Text({
-                    text: String(size),
-                    font: "700 14px system-ui, -apple-system, Segoe UI, Roboto",
-                    fill: new Fill({ color: "#fff" }),
-                    stroke: new Stroke({ color: "rgba(0,0,0,0.35)", width: 3 }),
-                  }),
-                });
-              },
-            });
+              // 다중 클러스터: 숫자 원형
+              const r = Math.max(18, Math.min(44, 12 + Math.log(size) * 10));
+              return new Style({
+                image: new CircleStyle({
+                  radius: r,
+                  fill: new Fill({ color: "rgba(33,150,243,0.9)" }),
+                  stroke: new Stroke({ color: "#0b3d91", width: 2 }),
+                }),
+                text: new Text({
+                  text: String(size),
+                  font: "700 14px system-ui, -apple-system, Segoe UI, Roboto",
+                  fill: new Fill({ color: "#fff" }),
+                  stroke: new Stroke({ color: "rgba(0,0,0,0.35)", width: 3 }),
+                }),
+              });
+            },
+          });
 
-            layersMapRef.current.set(layerName + ":pin", pinLayer);
-            layersMapRef.current.set(layerName + ":cluster", clusterLayer);
-            olLayers.push(clusterLayer, pinLayer);
+          layersMapRef.current.set(layerName + ":pin", pinLayer);
+          layersMapRef.current.set(layerName + ":cluster", clusterLayer);
+          olLayers.push(clusterLayer, pinLayer);
 
-            vectorSource.on("featuresloaderror", (e) => {
-              console.error(`${layerName} 데이터 로딩 실패:`, e);
-            });
-          }
+          vectorSource.on("featuresloaderror", (e) => {
+            console.error(`${layerName} 데이터 로딩 실패:`, e);
+          });
         }
       }
 
@@ -707,7 +701,7 @@ const MapComponent: React.FC = () => {
       setLocationLayers(locationGroups);
       setVisibleLayers(new Set());
 
-      return () => {
+      cleanup = () => {
         map.getView().un("change:resolution" as any, updateClusterVisibility);
         map.un("pointermove" as any, handlePointerMove);
         map.un("singleclick" as any, handleSingleClick);
@@ -725,6 +719,10 @@ const MapComponent: React.FC = () => {
     };
 
     init();
+
+    return () => {
+      if (cleanup) cleanup();
+    };
   }, []);
 
   // 패널에서 토글될 때만 클러스터/핀 표시 상태 다시 계산
@@ -732,14 +730,14 @@ const MapComponent: React.FC = () => {
     const map = mapInstanceRef.current;
     if (!map) return;
     const useCluster = resolutionToScale(map) > SCALE_CLUSTER;
-    visibleLayers.forEach((baseName) => {
+    visibleLayers.forEach((baseName: string) => {
       const pin = layersMapRef.current.get(baseName + ":pin");
       const cluster = layersMapRef.current.get(baseName + ":cluster");
       if (pin) pin.setVisible(!useCluster);
       if (cluster) cluster.setVisible(useCluster);
     });
     map.renderSync();
-  }, [visibleLayers, layersMapRef, mapInstanceRef]);
+  }, [visibleLayers]);
 
   // 검색 결과 클릭 시 지도 이동 및 마커 표시
   const handleLocationClick = (coordinates: [number, number]) => {

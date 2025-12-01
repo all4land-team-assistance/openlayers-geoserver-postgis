@@ -20,11 +20,9 @@ const SearchPanel: React.FC<SearchPanelProps> = ({
   admin1Options,
   selectedAdmin1,
   onChangeAdmin1,
-  locationList = [],
 }) => {
   const [isOpen, setIsOpen] = useState(true);
   const [searchName, setSearchName] = useState("");
-  const [searchLocation, setSearchLocation] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResultItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
@@ -84,13 +82,12 @@ const SearchPanel: React.FC<SearchPanelProps> = ({
     }
 
     if (onSearch) {
-      onSearch({ name: searchName, location: searchLocation });
+      onSearch({ name: searchName, location: "" });
     }
   };
 
   const handleReset = () => {
     setSearchName("");
-    setSearchLocation("");
     setSearchResults([]);
     setSearchError(null);
     setHasSearched(false);
@@ -198,32 +195,6 @@ const SearchPanel: React.FC<SearchPanelProps> = ({
               e.currentTarget.style.boxShadow = "none";
             }}
           />
-        </div>
-
-        {/* 소재지 검색 */}
-        <div style={{ marginBottom: "24px" }}>
-          <label className={commonStyles.formLabel}>소재지</label>
-          <select
-            value={searchLocation}
-            onChange={(e) => setSearchLocation(e.target.value)}
-            className={`${styles.select} ${commonStyles.inputField}`}
-            onFocus={(e) => {
-              e.currentTarget.style.borderColor = "#3b82f6";
-              e.currentTarget.style.boxShadow =
-                "0 0 0 3px rgba(59, 130, 246, 0.1)";
-            }}
-            onBlur={(e) => {
-              e.currentTarget.style.borderColor = "#e2e8f0";
-              e.currentTarget.style.boxShadow = "none";
-            }}
-          >
-            <option value="">전체</option>
-            {locationList.map((location) => (
-              <option key={location} value={location}>
-                {location}
-              </option>
-            ))}
-          </select>
         </div>
 
         {/* 버튼 그룹 */}
@@ -368,7 +339,9 @@ const SearchPanel: React.FC<SearchPanelProps> = ({
         {mapMode === "3d" && (
           <div className={styles.mapToggleContainer}>
             <div style={{ marginBottom: "24px" }}>
-              <label className={commonStyles.formLabel}>3D 행정구역(광역)</label>
+              <label className={commonStyles.formLabel}>
+                3D 행정구역(광역)
+              </label>
               <select
                 value={selectedAdmin1 ?? ""}
                 onChange={(e) =>

@@ -1,17 +1,13 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import cesium from 'vite-plugin-cesium'
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), cesium()],
   server: {
     proxy: {
       '/api': { target: 'http://localhost:3000', changeOrigin: true },
     },
-  },
-  define: {
-     CESIUM_BASE_URL: JSON.stringify(
-      "/node_modules/cesium/Build/Cesium"
-    ),
   },
 })

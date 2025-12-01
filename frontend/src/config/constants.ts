@@ -34,10 +34,22 @@ export const CITY_NAME_MAP: Record<string, string> = {
 // 카테고리 한글화 매핑 (이슈 #2 컨벤션 기반)
 export const CATEGORY_MAP: Record<string, string> = {
   Bomul: "보물",
+  Treasure: "보물", // 레이어 이름에 Treasure 사용
   Folk: "민속",
   Kookbo: "국보",
   Sajeok: "사적",
 };
+
+// 레이어 그룹 이름 한국어 매핑
+export const LAYER_GROUP_NAME_MAP: Record<string, string> = {
+  Kookbo_Group: "국보",
+  Treasure_Group: "보물",
+  Folk_Group: "민속",
+  Sajeok_Group: "사적",
+};
+
+// 표시할 레이어 그룹 목록 (한국어 이름)
+export const TARGET_LAYER_GROUPS = ["국보", "민속", "사적", "보물"];
 
 // 지도 초기 설정
 export const MAP_CONFIG = {

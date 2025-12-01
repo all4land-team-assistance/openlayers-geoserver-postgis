@@ -18,10 +18,14 @@ export interface SearchParams {
   location: string;
 }
 
+// 레이어 패널 카테고리 타입
+export type LayerCategory = "type" | "location";
+
 // 레이어 패널 Props
 export interface LayerPanelProps {
   isOpen: boolean;
-  layers: LayerInfo[];
+  typeLayers: LayerInfo[]; // 유형별 레이어 (국보, 민속, 사적, 보물)
+  locationLayers: LayerInfo[]; // 소재지별 레이어 (서울, 부산, 경기 등)
   visibleLayers: Set<string>;
   onToggleLayer: (layerName: string) => void;
   onClose: () => void;
@@ -62,7 +66,6 @@ export interface SearchPanelProps {
   admin1Options?: string[];
   selectedAdmin1?: string | null;
   onChangeAdmin1?: (value: string | null) => void;
-  locationList?: string[];
 }
 
 // 맵 인스턴스 및 레이어 맵
