@@ -9,8 +9,7 @@ import commonStyles from "../styles/common.module.css";
 
 // 백엔드 API 베이스 URL은 Vite 환경변수로 설정 (없으면 기본 '/api')
 // 예: VITE_API_BASE_URL="http://localhost:3000/api" 또는 "/api"
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || "/api";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
 
 const SearchPanel: React.FC<SearchPanelProps> = ({
   onSearch,
@@ -26,7 +25,6 @@ const SearchPanel: React.FC<SearchPanelProps> = ({
 }) => {
   const [isOpen, setIsOpen] = useState(true);
   const [searchName, setSearchName] = useState("");
-  const [searchLocation, setSearchLocation] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResultItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
@@ -49,13 +47,15 @@ const SearchPanel: React.FC<SearchPanelProps> = ({
       const data = await response.json();
       const results = data.results || [];
       setSearchResults(results);
-      
+
       // 검색 결과를 MapComponent에 전달하여 지도에 마커로 표시
       if (onSearchResults) {
         onSearchResults(results);
       }
     } catch (error) {
-      setSearchError(error instanceof Error ? error.message : "검색 중 오류가 발생했습니다");
+      setSearchError(
+        error instanceof Error ? error.message : "검색 중 오류가 발생했습니다"
+      );
       setSearchResults([]);
       // 검색 실패 시 마커도 제거
       if (onSearchResults) {
@@ -84,13 +84,12 @@ const SearchPanel: React.FC<SearchPanelProps> = ({
     }
 
     if (onSearch) {
-      onSearch({ name: searchName, location: searchLocation });
+      onSearch({ name: searchName, location: "" });
     }
   };
 
   const handleReset = () => {
     setSearchName("");
-    setSearchLocation("");
     setSearchResults([]);
     setSearchError(null);
     setHasSearched(false);
@@ -107,34 +106,50 @@ const SearchPanel: React.FC<SearchPanelProps> = ({
     let coordinates: [number, number] | null = null;
 
     // 방법 1: 직접 추출된 lat, lon 사용 (POINT의 경우)
-    if (item.lat !== null && item.lat !== undefined && 
-        item.lon !== null && item.lon !== undefined) {
+    if (
+      item.lat !== null &&
+      item.lat !== undefined &&
+      item.lon !== null &&
+      item.lon !== undefined
+    ) {
       // lat, lon은 POINT(위도, 경도) 형식이므로 [경도, 위도] 순서로 변환
       coordinates = [Number(item.lon), Number(item.lat)];
     }
     // 방법 2: geom_json에서 좌표 추출 (GeoJSON 형식)
     else if (item.geom_json) {
       const geomJson = item.geom_json;
-      
+
       // GeoJSON 형식 처리
       if (geomJson.type === "Point") {
         // Point: [경도, 위도]
         coordinates = [geomJson.coordinates[0], geomJson.coordinates[1]];
-      } else if (geomJson.type === "Polygon" || geomJson.type === "MultiPolygon") {
+      } else if (
+        geomJson.type === "Polygon" ||
+        geomJson.type === "MultiPolygon"
+      ) {
         // Polygon/MultiPolygon: 첫 번째 좌표의 중심점 사용
-        const coords = geomJson.type === "Polygon" 
-          ? geomJson.coordinates[0] 
-          : geomJson.coordinates[0][0];
-        
+        const coords =
+          geomJson.type === "Polygon"
+            ? geomJson.coordinates[0]
+            : geomJson.coordinates[0][0];
+
         // 중심점 계산
-        const centerLon = coords.reduce((sum: number, coord: number[]) => sum + coord[0], 0) / coords.length;
-        const centerLat = coords.reduce((sum: number, coord: number[]) => sum + coord[1], 0) / coords.length;
+        const centerLon =
+          coords.reduce((sum: number, coord: number[]) => sum + coord[0], 0) /
+          coords.length;
+        const centerLat =
+          coords.reduce((sum: number, coord: number[]) => sum + coord[1], 0) /
+          coords.length;
         coordinates = [centerLon, centerLat];
-      } else if (geomJson.type === "LineString" || geomJson.type === "MultiLineString") {
+      } else if (
+        geomJson.type === "LineString" ||
+        geomJson.type === "MultiLineString"
+      ) {
         // LineString: 첫 번째 좌표 사용
-        const coords = geomJson.type === "LineString"
-          ? geomJson.coordinates[0]
-          : geomJson.coordinates[0][0];
+        const coords =
+          geomJson.type === "LineString"
+            ? geomJson.coordinates[0]
+            : geomJson.coordinates[0][0];
         coordinates = [coords[0], coords[1]];
       }
     }
@@ -184,30 +199,6 @@ const SearchPanel: React.FC<SearchPanelProps> = ({
           />
         </div>
 
-        {/* 소재지 검색 */}
-        <div style={{ marginBottom: "24px" }}>
-          <label className={commonStyles.formLabel}>소재지</label>
-          <select
-            value={searchLocation}
-            onChange={(e) => setSearchLocation(e.target.value)}
-            className={`${styles.select} ${commonStyles.inputField}`}
-            onFocus={(e) => {
-              e.currentTarget.style.borderColor = "#3b82f6";
-              e.currentTarget.style.boxShadow =
-                "0 0 0 3px rgba(59, 130, 246, 0.1)";
-            }}
-            onBlur={(e) => {
-              e.currentTarget.style.borderColor = "#e2e8f0";
-              e.currentTarget.style.boxShadow = "none";
-            }}
-          >
-            <option value="">전체</option>
-            <option value="서울">서울특별시</option>
-            <option value="인천">인천광역시</option>
-            <option value="경기">경기도</option>
-          </select>
-        </div>
-
         {/* 버튼 그룹 */}
         <div className={commonStyles.buttonGroup}>
           <button onClick={handleSearch} className={commonStyles.primaryButton}>
@@ -230,16 +221,13 @@ const SearchPanel: React.FC<SearchPanelProps> = ({
         {hasSearched && (
           <div className={styles.searchResultsContainer}>
             <h4 className={styles.resultsTitle}>
-              검색 결과 {searchResults.length > 0 && `(${searchResults.length}개)`}
+              검색 결과{" "}
+              {searchResults.length > 0 && `(${searchResults.length}개)`}
             </h4>
-            
-            {isLoading && (
-              <div className={styles.loading}>검색 중...</div>
-            )}
 
-            {searchError && (
-              <div className={styles.error}>{searchError}</div>
-            )}
+            {isLoading && <div className={styles.loading}>검색 중...</div>}
+
+            {searchError && <div className={styles.error}>{searchError}</div>}
 
             {!isLoading && !searchError && searchResults.length === 0 && (
               <div className={styles.noResults}>검색 결과가 없습니다</div>
@@ -248,11 +236,19 @@ const SearchPanel: React.FC<SearchPanelProps> = ({
             {!isLoading && !searchError && searchResults.length > 0 && (
               <div className={styles.resultsList}>
                 {searchResults.map((item, index) => (
-                  <div 
-                    key={index} 
+                  <div
+                    key={index}
                     className={styles.resultItem}
                     onClick={() => handleResultClick(item)}
-                    title={(item.geom_json || (item.lat !== null && item.lat !== undefined && item.lon !== null && item.lon !== undefined)) ? "클릭하여 지도에서 위치 확인" : "위치 정보 없음"}
+                    title={
+                      item.geom_json ||
+                      (item.lat !== null &&
+                        item.lat !== undefined &&
+                        item.lon !== null &&
+                        item.lon !== undefined)
+                        ? "클릭하여 지도에서 위치 확인"
+                        : "위치 정보 없음"
+                    }
                   >
                     {(() => {
                       const heritageName = item["국가유산명"] || "이름 없음";
@@ -271,13 +267,17 @@ const SearchPanel: React.FC<SearchPanelProps> = ({
                         item["시군구"] ||
                         item["ccbaLctoNm"] ||
                         "";
-                      const locationText = [sido, sigungu].filter(Boolean).join(" ");
+                      const locationText = [sido, sigungu]
+                        .filter(Boolean)
+                        .join(" ");
 
                       return (
                         <>
                           <div className={styles.resultHeader}>
                             {/* 국가유산명 (좌측) */}
-                            <span className={styles.heritageName}>{heritageName}</span>
+                            <span className={styles.heritageName}>
+                              {heritageName}
+                            </span>
 
                             {/* 종목명 (우측 상단 배지) */}
                             {kind && (
@@ -342,7 +342,9 @@ const SearchPanel: React.FC<SearchPanelProps> = ({
           <>
             <div className={styles.mapToggleContainer}>
               <div>
-                <label className={commonStyles.formLabel}>3D 행정구역(광역)</label>
+                <label className={commonStyles.formLabel}>
+                  3D 행정구역(광역)
+                </label>
                 <select
                   value={selectedAdmin1 ?? ""}
                   onChange={(e) =>
@@ -376,12 +378,16 @@ const SearchPanel: React.FC<SearchPanelProps> = ({
                 <button
                   type="button"
                   className={`${styles.mapToggleButton} ${
-                    admin3DMode === "density" ? styles.mapToggleButtonActive : ""
+                    admin3DMode === "density"
+                      ? styles.mapToggleButtonActive
+                      : ""
                   }`}
                   onClick={() => {
                     if (!onChangeAdmin3DMode) return;
                     // 이미 density면 해제(null), 아니면 density로 설정
-                    onChangeAdmin3DMode(admin3DMode === "density" ? null : "density");
+                    onChangeAdmin3DMode(
+                      admin3DMode === "density" ? null : "density"
+                    );
                   }}
                 >
                   밀집도
@@ -395,7 +401,9 @@ const SearchPanel: React.FC<SearchPanelProps> = ({
                   onClick={() => {
                     if (!onChangeAdmin3DMode) return;
                     // 이미 model이면 해제(null), 아니면 model로 설정
-                    onChangeAdmin3DMode(admin3DMode === "model" ? null : "model");
+                    onChangeAdmin3DMode(
+                      admin3DMode === "model" ? null : "model"
+                    );
                   }}
                 >
                   3D 모델

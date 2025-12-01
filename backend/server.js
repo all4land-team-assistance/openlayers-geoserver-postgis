@@ -15,24 +15,19 @@ app.use(cors({ origin: ["http://localhost:5173", "http://127.0.0.1:5173"] }));
 // 환경변수가 있으면 우선 사용, 없으면 제공된 기본값 사용
 const dbConfig = {
   host: process.env.POSTGRES_HOST || process.env.POSTGIS_HOST || "34.64.132.12",
-  port: parseInt(process.env.POSTGRES_PORT || process.env.POSTGIS_PORT || "5432"),
+  port: parseInt(
+    process.env.POSTGRES_PORT || process.env.POSTGIS_PORT || "5432"
+  ),
   database: process.env.POSTGRES_DB || "postgres",
   user: process.env.POSTGRES_USER || "postgres",
   password: process.env.POSTGRES_PASS || "Sbsj123!",
 };
 
-console.log("🔌 PostgreSQL 연결 설정:", {
-  host: dbConfig.host,
-  port: dbConfig.port,
-  database: dbConfig.database,
-  user: dbConfig.user,
-});
-
 const pool = new Pool(dbConfig);
 
 // PostgreSQL 연결 테스트
-pool.on("connect", (client) => {
-  console.log("✅ PostgreSQL connected to:", client.database);
+pool.on("connect", () => {
+  // PostgreSQL 연결 성공
 });
 
 pool.on("error", (err, client) => {
@@ -46,7 +41,6 @@ pool.query("SELECT NOW()", (err, res) => {
     console.error("❌ PostgreSQL 연결 실패:", err.message);
     console.error("연결 설정을 확인하세요:", dbConfig);
   } else {
-    console.log("✅ PostgreSQL 연결 성공:", res.rows[0].now);
   }
 });
 
@@ -169,14 +163,14 @@ app.get("/api/search/heritage", async (req, res) => {
           // ILIKE로 대소문자 구분 없이 부분 검색 (%keyword%)
           const searchPattern = `%${keyword}%`;
           const searchResult = await pool.query(searchQuery, [searchPattern]);
-          
+
           if (searchResult.rows.length > 0) {
             // 각 결과에 소스 테이블 정보 추가
             // geom_json이 없을 경우를 대비해 geom 원본도 함께 반환
-            const resultsWithTable = searchResult.rows.map(row => {
+            const resultsWithTable = searchResult.rows.map((row) => {
               return {
                 ...row,
-                source_table: tableName
+                source_table: tableName,
               };
             });
             allResults.push(...resultsWithTable);
@@ -193,9 +187,9 @@ app.get("/api/search/heritage", async (req, res) => {
   } catch (e) {
     console.error("Search API error:", e);
     console.error("Error stack:", e.stack);
-    return res.status(500).json({ 
+    return res.status(500).json({
       error: String(e.message),
-      details: process.env.NODE_ENV === 'development' ? e.stack : undefined
+      details: process.env.NODE_ENV === "development" ? e.stack : undefined,
     });
   }
 });
@@ -203,6 +197,4 @@ app.get("/api/search/heritage", async (req, res) => {
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`✅ heritage proxy on http://localhost:${PORT}`);
-});
+app.listen(PORT, () => {});

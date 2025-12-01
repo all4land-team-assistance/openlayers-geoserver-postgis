@@ -1,20 +1,25 @@
 /**
  * 레이어 토글 패널 컴포넌트
- * GeoServer에서 동적으로 레이어 목록을 가져와 체크박스로 표시/숨김 제어
+ * 유형별/소재지별 탭으로 레이어를 분류하여 표시
  */
-import React from "react";
-import type { LayerPanelProps } from "../types";
+import React, { useState } from "react";
+import type { LayerPanelProps, LayerCategory } from "../types";
 import styles from "./LayerPanel.module.css";
 import commonStyles from "../styles/common.module.css";
 
 const LayerPanel: React.FC<LayerPanelProps> = ({
   isOpen,
-  layers,
+  typeLayers,
+  locationLayers,
   visibleLayers,
   onToggleLayer,
   onClose,
 }) => {
+  const [activeTab, setActiveTab] = useState<LayerCategory>("type");
+
   if (!isOpen) return null;
+
+  const currentLayers = activeTab === "type" ? typeLayers : locationLayers;
 
   return (
     <>
@@ -33,14 +38,30 @@ const LayerPanel: React.FC<LayerPanelProps> = ({
           </button>
         </div>
 
+        {/* 탭 버튼 */}
+        <div className={styles.tabContainer}>
+          <button
+            className={`${styles.tabButton} ${activeTab === "type" ? styles.tabButtonActive : ""}`}
+            onClick={() => setActiveTab("type")}
+          >
+            유형별
+          </button>
+          <button
+            className={`${styles.tabButton} ${activeTab === "location" ? styles.tabButtonActive : ""}`}
+            onClick={() => setActiveTab("location")}
+          >
+            소재지별
+          </button>
+        </div>
+
         {/* 레이어 목록 */}
-        {layers.length === 0 ? (
+        {currentLayers.length === 0 ? (
           <div className={styles.emptyState}>
             레이어를 불러오는 중...
           </div>
         ) : (
           <div className={styles.layerList}>
-            {layers.map((layer) => {
+            {currentLayers.map((layer) => {
               const isVisible = visibleLayers.has(layer.name);
               return (
                 <label

@@ -16,14 +16,26 @@ import { Style, Fill, Stroke } from "ol/style";
 import { Zoom } from "ol/control";
 import SearchPanel from "./SearchPanel";
 import LayerPanel from "./LayerPanel";
-import { GEOSERVER_URL, WORKSPACE, LAYER_STYLE } from "../config/constants";
+import {
+  GEOSERVER_URL,
+  WORKSPACE,
+  LAYER_STYLE,
+  CATEGORY_MAP,
+  TARGET_LAYER_GROUPS,
+  CITY_NAME_MAP,
+  LAYER_GROUP_NAME_MAP,
+} from "../config/constants";
 import { useMap } from "../hooks/useMap";
 import { useLayers } from "../hooks/useLayers";
-import type { LayerInfo, SearchResultItem, MapMode, Admin3DMode, } from "../types";
+import type {
+  LayerInfo,
+  SearchResultItem,
+  MapMode,
+  Admin3DMode,
+} from "../types";
 import Point from "ol/geom/Point";
 import Feature from "ol/Feature";
 import CircleStyle from "ol/style/Circle";
-import Overlay from "ol/Overlay";
 import CesiumPage from "../cesium/CesiumPage";
 
 // 클러스터링/텍스트/아이콘
@@ -57,12 +69,6 @@ function getIconByType(rawType?: string): string {
   if (t.includes("민속")) return "/icons/민속.svg";
   if (t.includes("사적")) return "/icons/사적.svg";
   return "/icons/보물.svg";
-}
-
-// <b> 태그만 제거 (내용은 유지)
-function removeBoldTags(text?: string) {
-  if (!text) return "";
-  return text.replace(/<\/?b>/gi, "");
 }
 
 // 현재 줌 기준 단일 피처 스타일(아이콘/점 전환)
@@ -105,7 +111,9 @@ const MapComponent: React.FC = () => {
 
   // 레이어 패널 상태
   const [isLayerPanelOpen, setIsLayerPanelOpen] = useState(false);
-  const [availableLayers, setAvailableLayers] = useState<LayerInfo[]>([]);
+  const [typeLayers, setTypeLayers] = useState<LayerInfo[]>([]); // 유형별 레이어
+  const [locationLayers, setLocationLayers] = useState<LayerInfo[]>([]); // 소재지별 레이어
+
   const [visibleLayers, setVisibleLayers] = useState<Set<string>>(new Set());
 
   // 지도 모드 (2D / 3D)
@@ -126,79 +134,211 @@ const MapComponent: React.FC = () => {
 
   // 검색 결과 레이어 관리
   const searchResultSourceRef = useRef<VectorSource | null>(null);
-  const searchResultLayerRef =
-    useRef<VectorLayer<VectorSource> | null>(null);
+  const searchResultLayerRef = useRef<VectorLayer<VectorSource> | null>(null);
 
   const handleToggleLayerPanel = () => setIsLayerPanelOpen(!isLayerPanelOpen);
 
-  // 패널 토글 시 :pin/:cluster 쌍을 함께 처리
-  const handleToggleLayer = (layerName: string) => {
-    const pin = layersMapRef.current.get(layerName + ":pin");
-    const cluster = layersMapRef.current.get(layerName + ":cluster");
-    const anyLayer = pin || cluster;
-    if (!anyLayer) {
-      console.error("레이어를 찾을 수 없습니다:", layerName);
-      return;
-    }
-
-    const next = new Set(visibleLayers);
-    const turnOn = !next.has(layerName);
+  // 레이어 표시/숨김 헬퍼 함수
+  const toggleLayerVisibility = (baseName: string, turnOn: boolean) => {
+    const pin = layersMapRef.current.get(baseName + ":pin");
+    const cluster = layersMapRef.current.get(baseName + ":cluster");
 
     if (turnOn) {
-      next.add(layerName);
       if (mapInstanceRef.current) {
-        const useCluster = resolutionToScale(mapInstanceRef.current) > SCALE_CLUSTER;
+        const useCluster =
+          resolutionToScale(mapInstanceRef.current) > SCALE_CLUSTER;
         if (pin) pin.setVisible(!useCluster);
         if (cluster) cluster.setVisible(useCluster);
       } else {
         if (pin) pin.setVisible(true);
       }
     } else {
-      next.delete(layerName);
       if (pin) pin.setVisible(false);
       if (cluster) cluster.setVisible(false);
     }
+  };
+
+  // 레이어 그룹 토글 시 해당 그룹의 모든 레이어를 토글 (유형별/소재지별)
+  const handleToggleLayer = (groupName: string) => {
+    const next = new Set(visibleLayers);
+    const turnOn = !next.has(groupName);
+
+    // 레이어 그룹 이름으로 유형별 그룹인지 확인
+    const koreanType = LAYER_GROUP_NAME_MAP[groupName];
+
+    if (koreanType && TARGET_LAYER_GROUPS.includes(koreanType)) {
+      // 유형별 그룹: 해당 유형의 모든 레이어 찾기
+      layersMapRef.current.forEach((_layer, layerKey) => {
+        const baseName = layerKey.split(":")[0];
+        const parts = baseName.split("_");
+
+        if (parts.length >= 2) {
+          const layerType = parts[parts.length - 1];
+          if (CATEGORY_MAP[layerType] === koreanType) {
+            toggleLayerVisibility(baseName, turnOn);
+          }
+        }
+      });
+    } else {
+      // 소재지별 그룹: 해당 지역의 모든 레이어 찾기
+      const baseKey = groupName.replace("_Group", "");
+      const koreanLocation = CITY_NAME_MAP[baseKey] || baseKey;
+
+      layersMapRef.current.forEach((_layer, layerKey) => {
+        const baseName = layerKey.split(":")[0];
+        const parts = baseName.split("_");
+
+        if (parts.length >= 2) {
+          const layerRegion = parts[0];
+          const layerType = parts[parts.length - 1];
+          const regionKorean = CITY_NAME_MAP[layerRegion] || layerRegion;
+          const typeKorean = CATEGORY_MAP[layerType];
+
+          if (
+            regionKorean === koreanLocation &&
+            typeKorean &&
+            TARGET_LAYER_GROUPS.includes(typeKorean)
+          ) {
+            toggleLayerVisibility(baseName, turnOn);
+          }
+        }
+      });
+    }
+
+    if (turnOn) {
+      next.add(groupName);
+    } else {
+      next.delete(groupName);
+    }
+
     setVisibleLayers(next);
     mapInstanceRef.current?.renderSync();
   };
 
-  // GeoServer에서 레이어 목록 획득
-  const fetchLayersFromGeoServer = async (): Promise<LayerInfo[]> => {
+  // WMS GetCapabilities로 레이어 그룹 목록 가져오기
+  const fetchLayerGroupsFromWMS = async (): Promise<LayerInfo[]> => {
+    try {
+      const response = await fetch(
+        `${GEOSERVER_URL}/wms?service=WMS&version=1.3.0&request=GetCapabilities`
+      );
+      const text = await response.text();
+      const xml = new DOMParser().parseFromString(text, "text/xml");
+
+      // LayerGroup 또는 Layer 요소 찾기
+      const layers = xml.getElementsByTagName("Layer");
+      const groups: LayerInfo[] = [];
+      const foundGroups = new Set<string>();
+
+      for (let i = 0; i < layers.length; i++) {
+        const layer = layers[i];
+        const nameElement = layer.getElementsByTagName("Name")[0];
+        if (!nameElement) continue;
+
+        const fullName = nameElement.textContent || "";
+
+        // WORKSPACE 접두사 제거 (예: "sbsj:Kookbo_Group" → "Kookbo_Group")
+        const groupName = fullName.startsWith(`${WORKSPACE}:`)
+          ? fullName.split(":")[1]
+          : fullName;
+
+        // 레이어 그룹 이름 확인 (예: "Kookbo_Group", "Treasure_Group" 등)
+        if (LAYER_GROUP_NAME_MAP[groupName] && !foundGroups.has(groupName)) {
+          foundGroups.add(groupName);
+          groups.push({
+            name: groupName,
+            displayName: LAYER_GROUP_NAME_MAP[groupName],
+            color: LAYER_STYLE.fill,
+          });
+        }
+      }
+
+      return groups;
+    } catch (e) {
+      console.error("GeoServer 레이어 그룹 목록 로딩 실패:", e);
+      return [];
+    }
+  };
+
+  // WFS GetCapabilities로 레이어 목록을 한 번만 가져오는 공통 함수
+  const fetchLayerCapabilities = async (): Promise<Element[]> => {
     try {
       const response = await fetch(
         `${GEOSERVER_URL}/wfs?service=WFS&version=1.1.0&request=GetCapabilities`
       );
       const text = await response.text();
       const xml = new DOMParser().parseFromString(text, "text/xml");
-
       const featureTypes = xml.getElementsByTagName("FeatureType");
-      const layers: LayerInfo[] = [];
+      return Array.from(featureTypes);
+    } catch (e) {
+      console.error("GeoServer 레이어 목록 로딩 실패:", e);
+      return [];
+    }
+  };
 
-      for (let i = 0; i < featureTypes.length; i++) {
-        const nameElement = featureTypes[i].getElementsByTagName("Name")[0];
-        const titleElement = featureTypes[i].getElementsByTagName("Title")[0];
+  // 레이어 이름 파싱 헬퍼 함수
+  const parseLayerName = (
+    fullName: string
+  ): { layerName: string; regionName: string; type: string } | null => {
+    if (!fullName.startsWith(`${WORKSPACE}:`)) return null;
+
+    const layerName = fullName.split(":")[1];
+    const parts = layerName.split("_");
+
+    if (parts.length < 2) return null;
+
+    return {
+      layerName,
+      regionName: parts[0],
+      type: parts[parts.length - 1],
+    };
+  };
+
+  // 소재지별로 그룹화
+  const fetchLocationGroupsFromGeoServer = async (
+    featureTypes: Element[]
+  ): Promise<LayerInfo[]> => {
+    try {
+      const locationSet = new Set<string>();
+
+      for (const featureType of featureTypes) {
+        const nameElement = featureType.getElementsByTagName("Name")[0];
         if (!nameElement) continue;
 
-        const fullName = nameElement.textContent || ""; // "sbsj:Busan_Kookbo"
-        if (!fullName.startsWith(`${WORKSPACE}:`)) continue;
-        const title = titleElement?.textContent || "";
-        const layerName = fullName.split(":")[1]; // "sbsj:Busan_Kookbo" → "Busan_Kookbo"
+        const fullName = nameElement.textContent || "";
+        const parsed = parseLayerName(fullName);
+        if (!parsed) continue;
 
-        layers.push({
-          name: layerName,
-          displayName: title || layerName,
+        const koreanType = CATEGORY_MAP[parsed.type] || null;
+        if (koreanType && TARGET_LAYER_GROUPS.includes(koreanType)) {
+          const koreanLocation =
+            CITY_NAME_MAP[parsed.regionName] || parsed.regionName;
+          locationSet.add(koreanLocation);
+        }
+      }
+
+      const groups: LayerInfo[] = [];
+      for (const koreanLocation of locationSet) {
+        const englishLocation =
+          Object.keys(CITY_NAME_MAP).find(
+            (key) => CITY_NAME_MAP[key] === koreanLocation
+          ) || koreanLocation;
+
+        groups.push({
+          name: englishLocation + "_Group",
+          displayName: koreanLocation,
           color: LAYER_STYLE.fill,
         });
       }
 
-    return layers;
-  } catch (e) {
-    console.error("GeoServer 레이어 목록 로딩 실패:", e);
-    return [];
-  }
-};
+      return groups.sort((a, b) =>
+        a.displayName.localeCompare(b.displayName, "ko")
+      );
+    } catch (e) {
+      console.error("GeoServer 소재지별 레이어 그룹 목록 로딩 실패:", e);
+      return [];
+    }
+  };
 
-  // GeoServer에서 kr_admin1의 name 목록 조회
   const fetchAdmin1Names = async (): Promise<string[]> => {
     try {
       const url =
@@ -227,21 +367,7 @@ const MapComponent: React.FC = () => {
     }
   };
 
-  // 지도 튐 방지- 닫기 전에 저장하고 트랜지션 끝난 뒤 복원
-  const restoreViewRef = useRef<{ center: number[]; zoom: number } | null>(null);
-  const isClosingRef = useRef(false);
-
   const closeDetailPanel = () => {
-    const map = mapInstanceRef.current;
-    if (map) {
-      const view = map.getView();
-      restoreViewRef.current = {
-        center: view.getCenter() ? [...view.getCenter()!] : fromLonLat([126.978, 37.5665]),
-        zoom: view.getZoom() ?? 8,
-      };
-      view.cancelAnimations();
-      isClosingRef.current = true;
-    }
     setIsDetailPanelOpen(false);
   };
 
@@ -262,6 +388,8 @@ const MapComponent: React.FC = () => {
 
     layersMapRef.current.clear();
 
+    let cleanup: (() => void) | null = null;
+
     const init = async () => {
       // 배경지도
       const osmLayer = new TileLayer({ source: new OSM() });
@@ -270,89 +398,113 @@ const MapComponent: React.FC = () => {
       const adminNames = await fetchAdmin1Names();
       setAdmin1Options(adminNames);
 
-      // 레이어 목록
-      const layers = await fetchLayersFromGeoServer();
+      // WFS GetCapabilities로 레이어 목록 한 번만 가져오기
+      const featureTypes = await fetchLayerCapabilities();
+
+      // 레이어 그룹 목록 가져오기 (유형별은 WMS에서 레이어 그룹 직접 사용, 소재지별은 레이어 이름 파싱)
+      const [typeGroups, locationGroups] = await Promise.all([
+        fetchLayerGroupsFromWMS(),
+        fetchLocationGroupsFromGeoServer(featureTypes),
+      ]);
 
       // 벡터/클러스터 레이어 구성
       const olLayers: VectorLayer<VectorSource | Cluster>[] = [];
-      layers.forEach((layerInfo) => {
-        const vectorSource = new VectorSource({
-          url: `${GEOSERVER_URL}/wfs?service=WFS&version=1.1.0&request=GetFeature&typeName=${WORKSPACE}:${layerInfo.name}&outputFormat=application/json&srsName=EPSG:4326`,
-          format: new GeoJSON({
-            dataProjection: "EPSG:4326",
-            featureProjection: "EPSG:3857",
-          }),
-        });
 
-        // :pin 레이어 (포인트는 아이콘/점 전환)
-        const pinLayer = new VectorLayer({
-          source: vectorSource,
-          visible: false,
-          className: "heritage-pin",
-          style: (feature) => {
-            const g: any = feature.getGeometry?.();
-            const t = g?.getType?.();
-            if (t === "Point" || t === "MultiPoint") {
-              const props = feature.getProperties?.() || {};
-              return makeSinglePointStyle(
-                props,
-                mapInstanceRef.current || undefined
-              );
-            }
-            // 라인/폴리곤
-            return new Style({
-              fill: new Fill({ color: "rgba(255,123,0,0.3)" }),
-              stroke: new Stroke({ color: "#ff7b00", width: 2 }),
-            });
-          },
-        });
+      // 모든 레이어를 로드 (유형별 필터링: 국보, 민속, 사적, 보물만)
+      for (const featureType of featureTypes) {
+        const nameElement = featureType.getElementsByTagName("Name")[0];
+        if (!nameElement) continue;
 
-        // cluster 레이어
-        const clusterSource = new Cluster({ distance: 35, source: vectorSource });
-        const clusterLayer = new VectorLayer({
-          source: clusterSource,
-          visible: false,
-          className: "heritage-cluster",
-          style: (feature) => {
-            const members = feature.get("features") || [];
-            const size = members.length;
+        const fullName = nameElement.textContent || "";
+        const parsed = parseLayerName(fullName);
+        if (!parsed) continue;
 
-            // 단일일 때도 줌에 따라 아이콘/점 전환
-            if (size === 1) {
-              const inner = members[0];
-              const props = inner.getProperties?.() || {};
-              return makeSinglePointStyle(
-                props,
-                mapInstanceRef.current || undefined
-              );
-            }
+        const koreanType = CATEGORY_MAP[parsed.type];
 
-            // 다중 클러스터: 숫자 원형
-            const r = Math.max(18, Math.min(44, 12 + Math.log(size) * 10));
-            return new Style({
-              image: new CircleStyle({
-                radius: r,
-                fill: new Fill({ color: "rgba(33,150,243,0.9)" }),
-                stroke: new Stroke({ color: "#0b3d91", width: 2 }),
-              }),
-              text: new Text({
-                text: String(size),
-                font: "700 14px system-ui, -apple-system, Segoe UI, Roboto",
-                fill: new Fill({ color: "#fff" }),
-                stroke: new Stroke({ color: "rgba(0,0,0,0.35)", width: 3 }),
-              }),
-            });
-          },
-        });
+        // 국보, 민속, 사적, 보물만 로드
+        if (koreanType && TARGET_LAYER_GROUPS.includes(koreanType)) {
+          const layerName = parsed.layerName;
+          const vectorSource = new VectorSource({
+            url: `${GEOSERVER_URL}/wfs?service=WFS&version=1.1.0&request=GetFeature&typeName=${WORKSPACE}:${layerName}&outputFormat=application/json&srsName=EPSG:4326`,
+            format: new GeoJSON({
+              dataProjection: "EPSG:4326",
+              featureProjection: "EPSG:3857",
+            }),
+          });
 
-        layersMapRef.current.set(layerInfo.name + ":pin", pinLayer);
-        layersMapRef.current.set(layerInfo.name + ":cluster", clusterLayer);
-        olLayers.push(clusterLayer, pinLayer);
+          // :pin 레이어 (포인트는 아이콘/점 전환)
+          const pinLayer = new VectorLayer({
+            source: vectorSource,
+            visible: false,
+            className: "heritage-pin",
+            style: (feature) => {
+              const g: any = feature.getGeometry?.();
+              const t = g?.getType?.();
+              if (t === "Point" || t === "MultiPoint") {
+                const props = feature.getProperties?.() || {};
+                return makeSinglePointStyle(
+                  props,
+                  mapInstanceRef.current || undefined
+                );
+              }
+              // 라인/폴리곤
+              return new Style({
+                fill: new Fill({ color: "rgba(255,123,0,0.3)" }),
+                stroke: new Stroke({ color: "#ff7b00", width: 2 }),
+              });
+            },
+          });
 
-        vectorSource.on("featuresloaderror", (e) => {
-          console.error(`${layerInfo.displayName} 데이터 로딩 실패:`, e);
-        });
-      });
+          // cluster 레이어
+          const clusterSource = new Cluster({
+            distance: 35,
+            source: vectorSource,
+          });
+          const clusterLayer = new VectorLayer({
+            source: clusterSource,
+            visible: false,
+            className: "heritage-cluster",
+            style: (feature) => {
+              const members = feature.get("features") || [];
+              const size = members.length;
+
+              // 단일일 때도 줌에 따라 아이콘/점 전환
+              if (size === 1) {
+                const inner = members[0];
+                const props = inner.getProperties?.() || {};
+                return makeSinglePointStyle(
+                  props,
+                  mapInstanceRef.current || undefined
+                );
+              }
+
+              // 다중 클러스터: 숫자 원형
+              const r = Math.max(18, Math.min(44, 12 + Math.log(size) * 10));
+              return new Style({
+                image: new CircleStyle({
+                  radius: r,
+                  fill: new Fill({ color: "rgba(33,150,243,0.9)" }),
+                  stroke: new Stroke({ color: "#0b3d91", width: 2 }),
+                }),
+                text: new Text({
+                  text: String(size),
+                  font: "700 14px system-ui, -apple-system, Segoe UI, Roboto",
+                  fill: new Fill({ color: "#fff" }),
+                  stroke: new Stroke({ color: "rgba(0,0,0,0.35)", width: 3 }),
+                }),
+              });
+            },
+          });
+
+          layersMapRef.current.set(layerName + ":pin", pinLayer);
+          layersMapRef.current.set(layerName + ":cluster", clusterLayer);
+          olLayers.push(clusterLayer, pinLayer);
+
+          vectorSource.on("featuresloaderror", (e) => {
+            console.error(`${layerName} 데이터 로딩 실패:`, e);
+          });
+        }
+      }
 
       // 검색 결과 레이어
       const searchResultSource = new VectorSource();
@@ -391,8 +543,12 @@ const MapComponent: React.FC = () => {
           }
 
           // 단일 마커인 경우
-          const props = clusterFeatures?.[0]?.getProperties() || feature.getProperties();
-          return makeSinglePointStyle( props, mapInstanceRef.current || undefined );
+          const props =
+            clusterFeatures?.[0]?.getProperties() || feature.getProperties();
+          return makeSinglePointStyle(
+            props,
+            mapInstanceRef.current || undefined
+          );
         },
       });
       searchResultSourceRef.current = searchResultSource;
@@ -448,7 +604,9 @@ const MapComponent: React.FC = () => {
         if (!pickedFeature) return;
 
         // 클러스터 클릭 시 동작
-        const layerClass = String( pickedLayer?.get("className") || pickedLayer?.getClassName?.() || "" );
+        const layerClass = String(
+          pickedLayer?.get("className") || pickedLayer?.getClassName?.() || ""
+        );
 
         // 검색 결과 클러스터면 확대만
         if (layerClass.includes("search-results")) {
@@ -462,7 +620,36 @@ const MapComponent: React.FC = () => {
             });
             return;
           }
-          pickedFeature = clusterFeatures?.[0] || pickedFeature;
+
+          // 단일 마커인 경우 상세 패널 열기
+          const actualFeature = clusterFeatures?.[0] || pickedFeature;
+          const props = actualFeature.getProperties();
+          const kdcd = String(
+            props["종목코드"] ?? props["ccbaKdcd"] ?? props["kdcd"] ?? ""
+          );
+          const sidoName = String(
+            props["시도명"] ?? props["sido"] ?? props["ccbaCtcdNm"] ?? ""
+          );
+          const name = String(
+            props["국가유산명"] ?? props["ccbaMnm1"] ?? props["name"] ?? ""
+          );
+          const ctcd = ctcdBySidoName[sidoName] ?? "";
+          const [lon, lat] = toLonLat(evt.coordinate);
+
+          setIsDetailPanelOpen(true);
+          setDetailLoading(true);
+          setDetailError(null);
+
+          try {
+            const d = await findBestDetail(kdcd, ctcd, name, [lon, lat]);
+            setSelectedDetail(d);
+          } catch (e: any) {
+            setSelectedDetail(null);
+            setDetailError(e?.message || "상세 조회 실패");
+          } finally {
+            setDetailLoading(false);
+          }
+          return;
         }
 
         if (layerClass.includes("heritage-cluster")) {
@@ -481,9 +668,15 @@ const MapComponent: React.FC = () => {
 
         // 상세 조회 파라미터
         const props = pickedFeature.getProperties();
-        const kdcd = String( props["종목코드"] ?? props["ccbaKdcd"] ?? props["kdcd"] ?? "" );
-        const sidoName = String( props["시도명"] ?? props["sido"] ?? props["ccbaCtcdNm"] ?? "" );
-        const name = String( props["국가유산명"] ?? props["ccbaMnm1"] ?? props["name"] ?? "" );
+        const kdcd = String(
+          props["종목코드"] ?? props["ccbaKdcd"] ?? props["kdcd"] ?? ""
+        );
+        const sidoName = String(
+          props["시도명"] ?? props["sido"] ?? props["ccbaCtcdNm"] ?? ""
+        );
+        const name = String(
+          props["국가유산명"] ?? props["ccbaMnm1"] ?? props["name"] ?? ""
+        );
         const ctcd = ctcdBySidoName[sidoName] ?? "";
         const [lon, lat] = toLonLat(evt.coordinate);
 
@@ -511,10 +704,12 @@ const MapComponent: React.FC = () => {
       };
       map.on("pointerdown" as any, onPointerDown);
 
-      setAvailableLayers(layers);
+      // 유형별, 소재지별 레이어 그룹 설정
+      setTypeLayers(typeGroups);
+      setLocationLayers(locationGroups);
       setVisibleLayers(new Set());
 
-      return () => {
+      cleanup = () => {
         map.getView().un("change:resolution" as any, updateClusterVisibility);
         map.un("pointermove" as any, handlePointerMove);
         map.un("singleclick" as any, handleSingleClick);
@@ -532,6 +727,10 @@ const MapComponent: React.FC = () => {
     };
 
     init();
+
+    return () => {
+      if (cleanup) cleanup();
+    };
   }, []);
 
   // 패널에서 토글될 때만 클러스터/핀 표시 상태 다시 계산
@@ -539,22 +738,30 @@ const MapComponent: React.FC = () => {
     const map = mapInstanceRef.current;
     if (!map) return;
     const useCluster = resolutionToScale(map) > SCALE_CLUSTER;
-    visibleLayers.forEach((baseName) => {
+    visibleLayers.forEach((baseName: string) => {
       const pin = layersMapRef.current.get(baseName + ":pin");
       const cluster = layersMapRef.current.get(baseName + ":cluster");
       if (pin) pin.setVisible(!useCluster);
       if (cluster) cluster.setVisible(useCluster);
     });
     map.renderSync();
-  }, [visibleLayers, layersMapRef, mapInstanceRef]);
+  }, [visibleLayers]);
 
   // 검색 결과 클릭 시 지도 이동 및 마커 표시
   const handleLocationClick = (coordinates: [number, number]) => {
     if (!mapInstanceRef.current) return;
     const [lon, lat] = coordinates;
     const view = mapInstanceRef.current.getView();
+
+    // 좌표를 OpenLayers 좌표계로 변환 (EPSG:3857)
     const center = fromLonLat([lon, lat]);
-    view.animate({ center, zoom: 15, duration: 1000 });
+
+    // 지도 중심 이동 및 줌 조정
+    view.animate({
+      center: center,
+      zoom: 15, // 적절한 줌 레벨로 설정
+      duration: 1000, // 1초 애니메이션
+    });
   };
 
   const handleSearchResults = (results: SearchResultItem[]) => {
@@ -579,10 +786,26 @@ const MapComponent: React.FC = () => {
         } else if (item.geom_json) {
           const geomJson = item.geom_json;
           if (geomJson.type === "Point") {
-            coordinates = [
-              geomJson.coordinates[0],
-              geomJson.coordinates[1],
-            ];
+            coordinates = [geomJson.coordinates[0], geomJson.coordinates[1]];
+          } else if (
+            geomJson.type === "Polygon" ||
+            geomJson.type === "MultiPolygon"
+          ) {
+            const coords =
+              geomJson.type === "Polygon"
+                ? geomJson.coordinates[0]
+                : geomJson.coordinates[0][0];
+            const centerLon =
+              coords.reduce(
+                (sum: number, coord: number[]) => sum + coord[0],
+                0
+              ) / coords.length;
+            const centerLat =
+              coords.reduce(
+                (sum: number, coord: number[]) => sum + coord[1],
+                0
+              ) / coords.length;
+            coordinates = [centerLon, centerLat];
           }
         }
 
@@ -603,251 +826,256 @@ const MapComponent: React.FC = () => {
     if (features.length > 0) {
       searchResultSourceRef.current.addFeatures(features);
       setTimeout(() => mapInstanceRef.current?.renderSync(), 0);
+
+      // 지도 업데이트는 한 번만
+      setTimeout(() => {
+        if (mapInstanceRef.current) {
+          mapInstanceRef.current.renderSync();
+        }
+      }, 0);
     }
   };
 
   return (
-  // 전체 화면: 세로
-  <div style={{ display: "flex", flexDirection: "column", height: "100vh", width: "100%" }}>
-    
-    {/* 본문 영역: 가로 */}
-    <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
-      
-      {/* 좌측 상세 패널 */}
-      <div
-        style={{
-          width: isDetailPanelOpen ? 320 : 0,
-          transition: "width 0.25s ease",
-          overflow: "hidden",
-          borderRight: isDetailPanelOpen ? "1px solid #e5e7eb" : "none",
-          background: "#fff",
-          color: "#000",
-          zIndex: 10,
-          display: "flex",
-          flexDirection: "column",
-          height: "100%",
-          flexShrink: 0
-        }}
-      >
-        {/* 헤더(고정) */}
+    // 전체 화면: 세로
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        height: "100vh",
+        width: "100%",
+      }}
+    >
+      {/* 본문 영역: 가로 */}
+      <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
+        {/* 좌측 상세 패널 */}
         <div
           style={{
-            padding: "12px 14px",
-            borderBottom: "1px solid #eee",
+            width: isDetailPanelOpen ? 320 : 0,
+            transition: "width 0.25s ease",
+            overflow: "hidden",
+            borderRight: isDetailPanelOpen ? "1px solid #e5e7eb" : "none",
+            background: "#fff",
+            color: "#000",
+            zIndex: 10,
             display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            flexShrink: 0
+            flexDirection: "column",
           }}
         >
-          <strong style={{ fontSize: 16 }}>상세 정보</strong>
-          <button
-            onClick={closeDetailPanel}
-            style={{
-              border: "none",
-              background: "transparent",
-              fontSize: 20,
-              cursor: "pointer",
-              color: "#000",
-              fontWeight: 700,
-              lineHeight: 1
-            }}
-            aria-label="닫기"
-          >
-            ×
-          </button>
-        </div>
-
-        {/* 본문(스크롤 영역) */}
-        <div
-          style={{
-            padding: 14,
-            overflowY: "auto",
-            flex: 1,
-            minHeight: 0
-          }}
-        >
-          {detailLoading && (
-            <div style={{ color: "#666", fontSize: 14 }}>
-              상세 정보 불러오는 중…
-            </div>
-          )}
-
-          {detailError && (
-            <div style={{ color: "#c00", fontSize: 14 }}>
-              상세 조회 실패: {detailError}
-            </div>
-          )}
-
-          {!detailLoading && !detailError && !selectedDetail && (
-            <div style={{ color: "#666", fontSize: 14 }}>
-              지도에서 문화유산을 선택하세요.
-            </div>
-          )}
-
-          {!detailLoading && !detailError && selectedDetail && (
-            <div>
-              <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 6 }}>
-                {selectedDetail.title}
-              </div>
-              <div style={{ color: "#666", fontSize: 13, marginBottom: 10 }}>
-                {[selectedDetail.kind, selectedDetail.sido]
-                  .filter(Boolean)
-                  .join(" / ")}
-              </div>
-
-              {selectedDetail.image && (
-                <img
-                  src={selectedDetail.image}
-                  alt=""
-                  style={{
-                    width: "100%",
-                    borderRadius: 10,
-                    marginBottom: 10
-                  }}
-                />
-              )}
-
-              <div
-                style={{
-                  fontSize: 13,
-                  lineHeight: 1.6,
-                  whiteSpace: "pre-line"
-                }}
-              >
-                {selectedDetail.desc || "상세 설명 없음"}
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* 오른쪽 지도 영역 */}
-      <div style={{ flex: 1, position: "relative", minHeight: 0 }}>
-        <SearchPanel 
-          onLocationClick={handleLocationClick} 
-          onSearchResults={handleSearchResults}
-          mapMode={mapMode}
-          onChangeMapMode={setMapMode}
-          admin1Options={admin1Options}
-          selectedAdmin1={selectedAdmin1}
-          onChangeAdmin1={setSelectedAdmin1}
-          admin3DMode={admin3DMode}
-          onChangeAdmin3DMode={setAdmin3DMode}
-        />
-
-        <div
-          id="zoom-controls"
-          style={{ position: "absolute", top: "20px", right: "20px", zIndex: 1000 }}
-        />
-
-        <button
-          onClick={handleToggleLayerPanel}
-          style={{
-            position: "absolute",
-            top: "80px",
-            right: "20px",
-            zIndex: 1000,
-            background: "rgba(255, 255, 255, 0.9)",
-            border: "1px solid #ddd",
-            borderRadius: "8px",
-            padding: "12px",
-            fontSize: "18px",
-            cursor: "pointer",
-            boxShadow: "0 2px 8px rgba(0,0,0,0.1)"
-          }}
-          title="레이어 목록"
-        >
-          ☰
-        </button>
-
-        <LayerPanel
-          isOpen={isLayerPanelOpen}
-          layers={availableLayers}
-          visibleLayers={visibleLayers}
-          onToggleLayer={handleToggleLayer}
-          onClose={() => setIsLayerPanelOpen(false)}
-        />
-
-      {/* 지도 영역(2D: OpenLayers, 3D: Cesium) */}
-      <div
-        style={{
-          width: "100%",
-          height: "100%",
-          flex: 1,
-          position: "relative"
-        }}
-      >
-        {/* 2D 모드: 기존 OpenLayers 캔버스 */}
-        <div
-          ref={mapRef}
-          style={{
-            width: "100%",
-            height: "100%",
-            display: mapMode === "2d" ? "block" : "none"
-          }}
-        />
-
-        {/* 3D 모드: Cesium */}
-        {mapMode === "3d" && (
+          {/* 헤더(고정) */}
           <div
             style={{
-              position: "absolute",
-              inset: 0,
+              padding: "12px 14px",
+              borderBottom: "1px solid #eee",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              flexShrink: 0,
             }}
           >
-            <CesiumPage
-              selectedAdmin1={selectedAdmin1}
-              admin3DMode={admin3DMode}
-            />
+            <strong style={{ fontSize: 16 }}>상세 정보</strong>
+            <button
+              onClick={closeDetailPanel}
+              style={{
+                border: "none",
+                background: "transparent",
+                fontSize: 20,
+                cursor: "pointer",
+                color: "#000",
+                fontWeight: 700,
+                lineHeight: 1,
+              }}
+              aria-label="닫기"
+            >
+              ×
+            </button>
           </div>
-        )}
+
+          {/* 본문(스크롤 영역) */}
+          <div
+            style={{
+              padding: 14,
+              overflowY: "auto",
+              flex: 1,
+              minHeight: 0,
+            }}
+          >
+            {detailLoading && (
+              <div style={{ color: "#666", fontSize: 14 }}>
+                상세 정보 불러오는 중…
+              </div>
+            )}
+
+            {detailError && (
+              <div style={{ color: "#c00", fontSize: 14 }}>
+                상세 조회 실패: {detailError}
+              </div>
+            )}
+
+            {!detailLoading && !detailError && !selectedDetail && (
+              <div style={{ color: "#666", fontSize: 14 }}>
+                지도에서 문화유산을 선택하세요.
+              </div>
+            )}
+
+            {!detailLoading && !detailError && selectedDetail && (
+              <div>
+                <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 6 }}>
+                  {selectedDetail.title}
+                </div>
+                <div style={{ color: "#666", fontSize: 13, marginBottom: 10 }}>
+                  {[selectedDetail.kind, selectedDetail.sido]
+                    .filter(Boolean)
+                    .join(" / ")}
+                </div>
+
+                {selectedDetail.image && (
+                  <img
+                    src={selectedDetail.image}
+                    alt=""
+                    style={{
+                      width: "100%",
+                      borderRadius: 10,
+                      marginBottom: 10,
+                    }}
+                  />
+                )}
+
+                <div
+                  style={{
+                    fontSize: 13,
+                    lineHeight: 1.6,
+                    whiteSpace: "pre-line",
+                  }}
+                >
+                  {selectedDetail.desc || "상세 설명 없음"}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* 오른쪽 지도 영역 */}
+        <div style={{ flex: 1, position: "relative", minHeight: 0 }}>
+          <SearchPanel
+            onLocationClick={handleLocationClick}
+            onSearchResults={handleSearchResults}
+            mapMode={mapMode}
+            onChangeMapMode={setMapMode}
+            admin1Options={admin1Options}
+            selectedAdmin1={selectedAdmin1}
+            onChangeAdmin1={setSelectedAdmin1}
+            admin3DMode={admin3DMode}
+            onChangeAdmin3DMode={setAdmin3DMode}
+          />
+
+          <div
+            id="zoom-controls"
+            style={{
+              position: "absolute",
+              top: "20px",
+              right: "20px",
+              zIndex: 1000,
+            }}
+          />
+
+          <button
+            onClick={handleToggleLayerPanel}
+            style={{
+              position: "absolute",
+              top: "80px",
+              right: "20px",
+              zIndex: 1000,
+              background: "rgba(255, 255, 255, 0.9)",
+              border: "1px solid #ddd",
+              borderRadius: "8px",
+              padding: "12px",
+              fontSize: "18px",
+              cursor: "pointer",
+              boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
+            }}
+            title="레이어 목록"
+          >
+            ☰
+          </button>
+
+          <LayerPanel
+            isOpen={isLayerPanelOpen}
+            typeLayers={typeLayers}
+            locationLayers={locationLayers}
+            visibleLayers={visibleLayers}
+            onToggleLayer={handleToggleLayer}
+            onClose={() => setIsLayerPanelOpen(false)}
+          />
+
+          {/* 지도 영역(2D: OpenLayers, 3D: Cesium) */}
+          <div
+            ref={mapRef}
+            style={{
+              width: "100%",
+              height: "100%",
+              display: mapMode === "2d" ? "block" : "none",
+            }}
+          />
+
+          {/* 3D 모드: Cesium */}
+          {mapMode === "3d" && (
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+              }}
+            >
+              <CesiumPage
+                selectedAdmin1={selectedAdmin1}
+                admin3DMode={admin3DMode}
+              />
+            </div>
+          )}
+
+          {/* 범례 이미지 */}
+          <img
+            src="/icons/범례.png"
+            alt="범례"
+            style={{
+              position: "absolute",
+              bottom: "40px",
+              right: "40px",
+              width: "200px",
+              borderRadius: "40px",
+              boxShadow: "0 4px 10px rgba(0,0,0,0.15)",
+              background: "rgba(255,255,255,0.9)",
+              zIndex: 1000,
+            }}
+          />
+        </div>
       </div>
 
-      {/* 범례 이미지 */}
-      <img
-        src="/icons/범례.png"
-        alt="범례"
-        style={{
-          position: "absolute",
-          bottom: "40px",
-          right: "40px",
-          width: "200px",
-          borderRadius: "40px",
-          boxShadow: "0 4px 10px rgba(0,0,0,0.15)",
-          background: "rgba(255,255,255,0.9)",
-          zIndex: 1000,
-        }}
-      />
-      </div>
-    </div>
-
-    {/* 메인 화면 하단 고정 */}
-    <footer>
-      <div
-        style={{
-          width: "100%",
-          height: 80,
-          background: "#7FCBB6",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center"
-        }}
-      >
-        <img
-          src="/icons/Logo.png"
-          alt="로고"
+      {/* 메인 화면 하단 고정 */}
+      <footer>
+        <div
           style={{
-            height: 42,
-            cursor: "pointer",
-            userSelect: "none",
+            width: "100%",
+            height: 80,
+            background: "#7FCBB6",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
           }}
-          onClick={() => window.location.reload()}
-        />
-      </div>
-    </footer>
-    
-  </div>
+        >
+          <img
+            src="/icons/Logo.png"
+            alt="로고"
+            style={{
+              height: 42,
+              cursor: "pointer",
+              userSelect: "none",
+            }}
+            onClick={() => window.location.reload()}
+          />
+        </div>
+      </footer>
+    </div>
   );
 };
 

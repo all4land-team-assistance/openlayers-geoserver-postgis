@@ -18,10 +18,14 @@ export interface SearchParams {
   location: string;
 }
 
+// 레이어 패널 카테고리 타입
+export type LayerCategory = "type" | "location";
+
 // 레이어 패널 Props
 export interface LayerPanelProps {
   isOpen: boolean;
-  layers: LayerInfo[];
+  typeLayers: LayerInfo[]; // 유형별 레이어 (국보, 민속, 사적, 보물)
+  locationLayers: LayerInfo[]; // 소재지별 레이어 (서울, 부산, 경기 등)
   visibleLayers: Set<string>;
   onToggleLayer: (layerName: string) => void;
   onClose: () => void;
@@ -37,7 +41,7 @@ export interface GeoJSONGeometry {
 export interface SearchResultItem {
   [key: string]: any;
   source_table: string;
-  "국가유산명"?: string;
+  국가유산명?: string;
   geom_json?: GeoJSONGeometry;
   lat?: number | null; // POINT의 위도 (ST_Y)
   lon?: number | null; // POINT의 경도 (ST_X)

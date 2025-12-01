@@ -17,3 +17,15 @@ GEOSERVER_PORT=8080
 
 # 시간대
 TZ=Asia/Seoul
+
+# 프론트엔드 배포 서버 연결용 환경변수
+# 프론트엔드에서 사용할 환경변수는 VITE_ 접두사를 붙여야 합니다
+# cp env-variables-cloud.txt frontend/.env
+# 또는 필요한 환경변수만 frontend/.env 파일에 추가
+
+# 배포된 GeoServer 서버 URL (선택사항)
+# 이 값이 설정되면 배포 서버를 사용하고, 없으면 로컬 프록시(/api/geoserver) 사용
+VITE_GEOSERVER_URL=http://34.47.71.252/geoserver
+
+# GeoServer Workspace 이름 (기본값: sbsj)
+VITE_GEOSERVER_WORKSPACE=sbsj
