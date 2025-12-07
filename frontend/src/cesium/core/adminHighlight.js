@@ -313,7 +313,9 @@ export function runAdmin3DModeEffect({
           countToHeight[cnt] = baseHeight + (idx + 1) * step;
         });
 
-        const color = Cesium.Color.fromCssColorString("#2563eb").withAlpha(0.6);
+        // 밀집도 extrude용 반투명 색
+        const color = Cesium.Color.fromCssColorString("#2563eb");
+
         const bigPositions = [];
         const minAreaM2 = 8_000_000;
 
@@ -449,6 +451,76 @@ export function runAdmin3DModeEffect({
         clearHeritageLayer(viewer, heritageSourceRef);
         overlay?.clear();
 
+        // 1단계: kr_admin1에서 bjcd prefix 가져와서
+        //        해당 광역의 kr_admin2 전체를 밑 레이어로 띄움
+        const admin1Url = buildAdmin1WfsUrl(selectedAdmin1);
+        const admin1Json = await fetchGeoJson(admin1Url);
+        if (cancelled) return;
+
+        const admin1Features = admin1Json.features || [];
+        if (!admin1Features.length) {
+          console.warn(
+            "[MODEL] kr_admin1에서 광역을 찾지 못함:",
+            selectedAdmin1
+          );
+        } else {
+          const admin1Props = admin1Features[0].properties || {};
+          const admin1BjcdRaw = admin1Props.bjcd;
+          const admin1Bjcd = String(admin1BjcdRaw || "");
+          const bjcdPrefix = admin1Bjcd.slice(0, 2);
+
+          console.log(
+            "[MODEL] kr_admin1 bjcd=",
+            admin1Bjcd,
+            "prefix=",
+            bjcdPrefix
+          );
+
+          const admin2Url = buildAdmin2ByBjcdPrefix(bjcdPrefix);
+          const admin2Ds = await Cesium.GeoJsonDataSource.load(admin2Url, {
+            clampToGround: false,
+          });
+          if (!cancelled) {
+            viewer.dataSources.add(admin2Ds);
+            admin2SourceRef.current = admin2Ds;
+
+            const entities2 = admin2Ds.entities.values;
+            const time2 = viewer.clock.currentTime;
+
+            const baseColor2 = Cesium.Color.fromCssColorString("#1d4ed8");
+            const fillColor2 = new Cesium.Color(
+              baseColor2.red,
+              baseColor2.green,
+              baseColor2.blue,
+              0.22 // 밑 레이어용, 연하고 투명
+            );
+
+            for (let i = 0; i < entities2.length; i++) {
+              const ent = entities2[i];
+              const poly = ent.polygon;
+              if (!poly) continue;
+
+              let hierarchy = poly.hierarchy;
+              if (!hierarchy) continue;
+              if (typeof hierarchy.getValue === "function") {
+                hierarchy = hierarchy.getValue(time2);
+              }
+              const posArray = hierarchy.positions || hierarchy;
+              if (!posArray || posArray.length < 3) {
+                ent.show = false;
+                continue;
+              }
+
+              poly.material = fillColor2;
+              poly.outline = true;
+              poly.outlineColor = baseColor2;
+              poly.height = 0;
+              poly.extrudedHeight = 0;
+            }
+          }
+        }
+
+        // 2단계: Heritage_ALL 포인트
         const heritageUrl = buildHeritageInAdmin1WfsUrl(selectedAdmin1);
         const heritageDs = await Cesium.GeoJsonDataSource.load(heritageUrl, {
           clampToGround: false,
@@ -495,20 +567,6 @@ export function runAdmin3DModeEffect({
             outlineColor: Cesium.Color.BLACK,
             outlineWidth: 1,
           });
-
-          // 포인트 위에 이름 라벨 (Cesium label)
-          if (nm) {
-            ent.label = new Cesium.LabelGraphics({
-              text: nm,
-              font: "700 14px 'Noto Sans KR', system-ui, sans-serif",
-              style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-              fillColor: Cesium.Color.WHITE,
-              outlineColor: Cesium.Color.BLACK,
-              outlineWidth: 3,
-              verticalOrigin: Cesium.VerticalOrigin.TOP,
-              pixelOffset: new Cesium.Cartesian2(0, -14),
-            });
-          }
 
           if (i < 5 && nm) {
             console.log("[MODEL] 샘플 문화재:", nm);
