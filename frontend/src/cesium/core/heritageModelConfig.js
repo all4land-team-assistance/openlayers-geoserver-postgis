@@ -10,7 +10,7 @@ export const HERITAGE_MODEL_CONFIG = {
     uri: "/3DModel/민속.glb",
     scale: 100.0,
     headingDeg: 0,
-    heightOffset: 0,
+    heightOffset: 7,
   },
   보물: {
     uri: "/3DModel/보물.glb",
