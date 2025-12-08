@@ -45,7 +45,7 @@ pool.query("SELECT NOW()", (err, res) => {
 });
 
 // GeoServer 프록시 설정
-const GEOSERVER_BASE = "http://34.47.92.35/geoserver";
+const GEOSERVER_BASE = "https://34.8.126.105.nip.io/geoserver";
 
 app.use("/api/geoserver", async (req, res) => {
   try {
