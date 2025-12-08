@@ -493,6 +493,8 @@ export function runAdmin3DModeEffect({
               0.22
             );
 
+            const regionLabelTargets = new Map();
+
             for (let i = 0; i < entities2.length; i++) {
               const ent = entities2[i];
               const poly = ent.polygon;
@@ -517,28 +519,42 @@ export function runAdmin3DModeEffect({
               poly.height = 0;
               poly.extrudedHeight = 0;
 
-              // kr_admin2 시군구 이름 읽기
               const regionName = readRegionName(props, time2);
-              if (regionName) {
-                const bs = Cesium.BoundingSphere.fromPoints(posArray);
-                if (Cesium.defined(bs)) {
-                  ent.label = new Cesium.LabelGraphics({
-                    text: regionName,
-                    font: "700 18px 'Noto Sans KR', system-ui, sans-serif",
-                    style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-                    fillColor: Cesium.Color.WHITE,
-                    outlineColor: Cesium.Color.BLACK,
-                    outlineWidth: 3,
-                    verticalOrigin: Cesium.VerticalOrigin.CENTER,
-                    pixelOffset: new Cesium.Cartesian2(0, 0),
-                    heightReference: Cesium.HeightReference.NONE,
-                    disableDepthTestDistance: Number.POSITIVE_INFINITY,
-                  });
+              if (!regionName) continue;
 
-                  // 라벨 위치를 폴리곤 중심으로 고정
-                  ent.position = bs.center;
-                }
+              // 폴리곤 면적 계산해서 가장 큰 폴리곤 하나만 라벨 타깃으로 사용
+              const area = polygonAreaMeters2(posArray);
+              const bs = Cesium.BoundingSphere.fromPoints(posArray);
+              if (!Cesium.defined(bs)) continue;
+
+              const prev = regionLabelTargets.get(regionName);
+              if (!prev || area > prev.area) {
+                regionLabelTargets.set(regionName, {
+                  ent,
+                  center: bs.center,
+                  area,
+                });
               }
+            }
+
+            // 여기서 실제 라벨은 "타깃으로 골라진 폴리곤"에만 단다
+            for (const [regionName, info] of regionLabelTargets.entries()) {
+              const { ent, center } = info;
+
+              ent.label = new Cesium.LabelGraphics({
+                text: regionName,
+                font: "700 18px 'Noto Sans KR', system-ui, sans-serif",
+                style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+                fillColor: Cesium.Color.WHITE,
+                outlineColor: Cesium.Color.BLACK,
+                outlineWidth: 3,
+                verticalOrigin: Cesium.VerticalOrigin.CENTER,
+                pixelOffset: new Cesium.Cartesian2(0, 0),
+                heightReference: Cesium.HeightReference.NONE,
+                disableDepthTestDistance: Number.POSITIVE_INFINITY,
+              });
+
+              ent.position = center;
             }
           }
         }
