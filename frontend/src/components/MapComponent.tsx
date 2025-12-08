@@ -145,9 +145,11 @@ const MapComponent: React.FC = () => {
     setMapMode(nextMode);
   };
 
-  // 검색 결과 레이어 관리
+  // 검색 결과 레이어 관리 (2D) + 3D 전달용 상태
   const searchResultSourceRef = useRef<VectorSource | null>(null);
   const searchResultLayerRef = useRef<VectorLayer<VectorSource> | null>(null);
+  const [searchResults3d, setSearchResults3d] = useState<SearchResultItem[]>([]);
+  const [flyToLocation3d, setFlyToLocation3d] = useState<[number, number] | null>(null);
 
   const handleToggleLayerPanel = () => setIsLayerPanelOpen(!isLayerPanelOpen);
 
@@ -760,24 +762,70 @@ const MapComponent: React.FC = () => {
     map.renderSync();
   }, [visibleLayers]);
 
-  // 검색 결과 클릭 시 지도 이동 및 마커 표시
+  // 검색 결과 클릭 시 지도 이동 (2D는 OL, 3D는 Cesium에 전달)
   const handleLocationClick = (coordinates: [number, number]) => {
-    if (!mapInstanceRef.current) return;
     const [lon, lat] = coordinates;
+
+    if (mapMode === "3d") {
+      setFlyToLocation3d([lon, lat]);
+      return;
+    }
+
+    if (!mapInstanceRef.current) return;
     const view = mapInstanceRef.current.getView();
-
-    // 좌표를 OpenLayers 좌표계로 변환 (EPSG:3857)
     const center = fromLonLat([lon, lat]);
-
-    // 지도 중심 이동 및 줌 조정
     view.animate({
-      center: center,
-      zoom: 15, // 적절한 줌 레벨로 설정
-      duration: 1000, // 1초 애니메이션
+      center,
+      zoom: 15,
+      duration: 1000,
     });
   };
 
+  // 검색 결과 좌표 추출 헬퍼 (2D/3D 공용)
+  const extractCoordinatesFromItem = (
+    item: SearchResultItem
+  ): [number, number] | null => {
+    if (
+      item.lat !== null &&
+      item.lat !== undefined &&
+      item.lon !== null &&
+      item.lon !== undefined
+    ) {
+      return [Number(item.lon), Number(item.lat)];
+    }
+    if (item.geom_json) {
+      const geomJson = item.geom_json;
+      if (geomJson.type === "Point") {
+        return [geomJson.coordinates[0], geomJson.coordinates[1]];
+      } else if (geomJson.type === "Polygon" || geomJson.type === "MultiPolygon") {
+        const coords =
+          geomJson.type === "Polygon"
+            ? geomJson.coordinates[0]
+            : geomJson.coordinates[0][0];
+        const centerLon =
+          coords.reduce((sum: number, coord: number[]) => sum + coord[0], 0) /
+          coords.length;
+        const centerLat =
+          coords.reduce((sum: number, coord: number[]) => sum + coord[1], 0) /
+          coords.length;
+        return [centerLon, centerLat];
+      } else if (geomJson.type === "LineString" || geomJson.type === "MultiLineString") {
+        const coords =
+          geomJson.type === "LineString"
+            ? geomJson.coordinates[0]
+            : geomJson.coordinates[0][0];
+        return [coords[0], coords[1]];
+      }
+    }
+    return null;
+  };
+
   const handleSearchResults = (results: SearchResultItem[]) => {
+    // 3D용 상태는 항상 업데이트
+    setSearchResults3d(results);
+    // 새 결과가 들어오면 3D flyTo는 초기화 (다음 클릭 시 적용)
+    setFlyToLocation3d(null);
+
     if (!searchResultSourceRef.current || !mapInstanceRef.current) return;
     searchResultSourceRef.current.clear();
 
@@ -846,6 +894,43 @@ const MapComponent: React.FC = () => {
           mapInstanceRef.current.renderSync();
         }
       }, 0);
+    }
+  };
+
+  // 3D 검색 마커 클릭 시 좌측 상세 패널 열기 (2D 로직과 동일한 findBestDetail 사용)
+  const handleSearchResultClick3D = async (item: SearchResultItem) => {
+    const coordinates = extractCoordinatesFromItem(item);
+    if (!coordinates) {
+      setSelectedDetail(null);
+      setDetailError("위치 정보가 없는 결과입니다");
+      setIsDetailPanelOpen(true);
+      return;
+    }
+
+    const [lon, lat] = coordinates;
+    const kdcd = String(
+      item["종목코드"] ?? item["ccbaKdcd"] ?? item["kdcd"] ?? ""
+    );
+    const sidoName = String(
+      item["시도명"] ?? item["sido"] ?? item["ccbaCtcdNm"] ?? ""
+    );
+    const name = String(
+      item["국가유산명"] ?? item["ccbaMnm1"] ?? item["name"] ?? ""
+    );
+    const ctcd = ctcdBySidoName[sidoName] ?? "";
+
+    setIsDetailPanelOpen(true);
+    setDetailLoading(true);
+    setDetailError(null);
+
+    try {
+      const d = await findBestDetail(kdcd, ctcd, name, [lon, lat]);
+      setSelectedDetail(d);
+    } catch (e: any) {
+      setSelectedDetail(null);
+      setDetailError(e?.message || "상세 조회 실패");
+    } finally {
+      setDetailLoading(false);
     }
   };
 
@@ -1042,6 +1127,9 @@ const MapComponent: React.FC = () => {
               <CesiumPage
                 selectedAdmin1={selectedAdmin1}
                 admin3DMode={admin3DMode}
+                searchResults={searchResults3d}
+                onSearchResultClick={handleSearchResultClick3D}
+                flyToLocation={flyToLocation3d}
               />
             </div>
           )}
