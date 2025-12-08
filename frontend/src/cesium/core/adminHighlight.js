@@ -52,7 +52,7 @@ function readRegionName(props, time) {
       return String(v);
     }
   }
-
+  
   // 혹시 컬럼명이 다른 경우 대비 (필요하면 키만 추가)
   const candidates = ["adm_nm", "SIG_KOR_NM", "시군구명"];
   for (const key of candidates) {
@@ -67,6 +67,28 @@ function readRegionName(props, time) {
   }
 
   return null;
+}
+
+/**
+ * 라벨용 worldPosition을 extrudedHeight 만큼 위로 들어올리는 헬퍼
+ * - basePos: 폴리곤 중심(지표면 기준) Cartesian3
+ * - extrudedHeight: 폴리곤 extrude 높이(m)
+ */
+function raiseLabelPosition(basePos, extrudedHeight) {
+  if (!basePos || !Cesium.defined(basePos)) return basePos;
+
+  const carto = Cesium.Cartographic.fromCartesian(basePos);
+
+  // 기둥 높이 + 여유 500m 정도 위로 올려서 라벨이 기둥 위에 떠 보이게
+  const offset = (extrudedHeight || 0) + 500.0;
+
+  carto.height += offset;
+
+  return Cesium.Cartesian3.fromRadians(
+    carto.longitude,
+    carto.latitude,
+    carto.height
+  );
 }
 
 /**
@@ -208,7 +230,7 @@ export function runAdmin3DModeEffect({
         clearAdmin2Layer(viewer, admin2SourceRef);
         clearHeritageLayer(viewer, heritageSourceRef);
 
-        // 광역 이름 텍스트는 밀집도 모드에서는 숨김
+        // 광역 이름 텍스트 / 기존 단일 오버레이는 밀집도 모드에서 초기화
         overlay?.clear();
 
         // 1단계: kr_admin1에서 bjcd 가져오기
@@ -296,7 +318,7 @@ export function runAdmin3DModeEffect({
             continue;
           }
 
-          const cnt = countsByRegion[regionName] ?? 0;
+          const cnt = countsByRegion[regionName] ? countsByRegion[regionName] : 0;
           perEntityCount.set(ent, cnt);
           allCounts.push(cnt);
         }
@@ -313,11 +335,14 @@ export function runAdmin3DModeEffect({
           countToHeight[cnt] = baseHeight + (idx + 1) * step;
         });
 
-        // 밀집도 extrude용 반투명 색
+        // 밀집도 extrude 색 (불투명)
         const color = Cesium.Color.fromCssColorString("#2563eb");
 
         const bigPositions = [];
         const minAreaM2 = 8_000_000;
+
+        // DOM 레이어용 레이블 정보
+        const labelInfos = [];
 
         for (let i = 0; i < entities.length; i++) {
           const ent = entities[i];
@@ -361,19 +386,30 @@ export function runAdmin3DModeEffect({
             bigPositions.push(posArray[j]);
           }
 
-          if (regionName) {
-            ent.label = new Cesium.LabelGraphics({
-              text: regionName,
-              font: "700 18px 'Noto Sans KR', system-ui, sans-serif",
-              style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-              fillColor: Cesium.Color.WHITE,
-              outlineColor: Cesium.Color.BLACK,
-              outlineWidth: 3,
-              verticalOrigin: Cesium.VerticalOrigin.CENTER,
-              pixelOffset: new Cesium.Cartesian2(0, 0),
-              heightReference: Cesium.HeightReference.NONE,
-              disableDepthTestDistance: Number.POSITIVE_INFINITY,
-            });
+          // 시군구 이름은 Cesium Label 대신 DOM 레이어에 올린다
+          if (regionName && overlay && typeof overlay.showRegions === "function") {
+            let labelPos =
+              ent.position && typeof ent.position.getValue === "function"
+                ? ent.position.getValue(time)
+                : ent.position;
+
+            // position 없으면 폴리곤 중심(bounding sphere center) 사용
+            if (!labelPos) {
+              const bs = Cesium.BoundingSphere.fromPoints(posArray);
+              if (Cesium.defined(bs)) {
+                labelPos = bs.center;
+              }
+            }
+
+            if (labelPos) {
+              const lifted = raiseLabelPosition(labelPos, height);
+
+              labelInfos.push({
+                worldPosition: lifted,
+                text: regionName,
+                fontSizePx: 14, // 밀집도용은 조금 작게
+              });
+            }
           }
         }
 
@@ -393,46 +429,9 @@ export function runAdmin3DModeEffect({
           }
         }
 
-        // 시군구 클릭 시 DOM 오버레이로 이름 표시
-        if (!viewer.__admin2ClickHandlerInstalled) {
-          viewer.__admin2ClickHandlerInstalled = true;
-
-          viewer.screenSpaceEventHandler.setInputAction(
-            (movement) => {
-              if (!overlay) return;
-
-              const picked = viewer.scene.pick(movement.position);
-              if (!Cesium.defined(picked) || !picked.id) return;
-
-              const ent = picked.id;
-              if (!ent.polygon || !ent.properties) return;
-
-              const timeNow = viewer.clock.currentTime;
-              const regionName = readRegionName(ent.properties, timeNow);
-              if (!regionName) {
-                console.warn(
-                  "[DENSITY] 클릭된 admin2 엔티티에서 이름을 읽지 못함:",
-                  ent.properties
-                );
-                return;
-              }
-
-              let hierarchy = ent.polygon.hierarchy;
-              if (!hierarchy) return;
-              if (typeof hierarchy.getValue === "function") {
-                hierarchy = hierarchy.getValue(timeNow);
-              }
-              const posArray = hierarchy.positions || hierarchy;
-              if (!posArray || posArray.length < 3) return;
-
-              const bs = Cesium.BoundingSphere.fromPoints(posArray);
-              if (!Cesium.defined(bs)) return;
-
-              // 세부 지역은 글자 크기 작게 (예: 18px)
-              overlay.show(bs.center, regionName, 18);
-            },
-            Cesium.ScreenSpaceEventType.LEFT_CLICK
-          );
+        // 시군구 이름을 DOM 레이어에 한 번에 그려준다
+        if (overlay && typeof overlay.showRegions === "function") {
+          overlay.showRegions(labelInfos, 14);
         }
       } catch (err) {
         console.error("밀집도 모드 처리 중 오류:", err);
@@ -451,8 +450,7 @@ export function runAdmin3DModeEffect({
         clearHeritageLayer(viewer, heritageSourceRef);
         overlay?.clear();
 
-        // 1단계: kr_admin1에서 bjcd prefix 가져와서
-        //        해당 광역의 kr_admin2 전체를 밑 레이어로 띄움
+        // 1단계: kr_admin1에서 bjcd prefix 가져와서 해당 광역의 kr_admin2 전체를 밑 레이어로 띄움
         const admin1Url = buildAdmin1WfsUrl(selectedAdmin1);
         const admin1Json = await fetchGeoJson(admin1Url);
         if (cancelled) return;
@@ -492,13 +490,14 @@ export function runAdmin3DModeEffect({
               baseColor2.red,
               baseColor2.green,
               baseColor2.blue,
-              0.22 // 밑 레이어용, 연하고 투명
+              0.22
             );
 
             for (let i = 0; i < entities2.length; i++) {
               const ent = entities2[i];
               const poly = ent.polygon;
-              if (!poly) continue;
+              const props = ent.properties;
+              if (!poly || !props) continue;
 
               let hierarchy = poly.hierarchy;
               if (!hierarchy) continue;
@@ -511,11 +510,35 @@ export function runAdmin3DModeEffect({
                 continue;
               }
 
+              // 밑 레이어 폴리곤 스타일
               poly.material = fillColor2;
               poly.outline = true;
               poly.outlineColor = baseColor2;
               poly.height = 0;
               poly.extrudedHeight = 0;
+
+              // kr_admin2 시군구 이름 읽기
+              const regionName = readRegionName(props, time2);
+              if (regionName) {
+                const bs = Cesium.BoundingSphere.fromPoints(posArray);
+                if (Cesium.defined(bs)) {
+                  ent.label = new Cesium.LabelGraphics({
+                    text: regionName,
+                    font: "700 18px 'Noto Sans KR', system-ui, sans-serif",
+                    style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+                    fillColor: Cesium.Color.WHITE,
+                    outlineColor: Cesium.Color.BLACK,
+                    outlineWidth: 3,
+                    verticalOrigin: Cesium.VerticalOrigin.CENTER,
+                    pixelOffset: new Cesium.Cartesian2(0, 0),
+                    heightReference: Cesium.HeightReference.NONE,
+                    disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                  });
+
+                  // 라벨 위치를 폴리곤 중심으로 고정
+                  ent.position = bs.center;
+                }
+              }
             }
           }
         }
@@ -587,7 +610,7 @@ export function runAdmin3DModeEffect({
           }
         }
 
-        // 문화재 클릭 시 DOM 말풍선으로 이름 표시
+        // 여기서부터 다시 추가: Heritage 포인트만 클릭 시 DOM 오버레이
         if (!viewer.__heritageClickHandlerInstalled) {
           viewer.__heritageClickHandlerInstalled = true;
 
@@ -599,6 +622,10 @@ export function runAdmin3DModeEffect({
               if (!Cesium.defined(picked) || !picked.id) return;
 
               const ent = picked.id;
+
+              // 레이어(폴리곤)는 무시하고, 포인트(노란 점)만 처리
+              if (!ent.point || ent.polygon) return;
+
               const props = ent.properties;
               if (!props) return;
 
@@ -616,9 +643,6 @@ export function runAdmin3DModeEffect({
 
               if (!name || !pos) return;
 
-              console.log("[MODEL] 클릭된 문화재:", name);
-
-              // 작은 포인트용이라 글자 크기를 줄여서 사용
               overlay.show(pos, name, 16);
             },
             Cesium.ScreenSpaceEventType.LEFT_CLICK
