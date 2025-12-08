@@ -1,3 +1,4 @@
+// src/cesium/core/adminHighlight.js
 import * as Cesium from "cesium";
 import {
   buildAdmin1WfsUrl,
@@ -5,6 +6,12 @@ import {
   buildHeritageInAdmin1WfsUrl,
   fetchGeoJson,
 } from "../services/WfsUtil";
+import { getHeritageModelConfig } from "./heritageModelConfig";
+
+// 카메라와 포인트 사이 거리가 이 값보다 작으면 glb 생성
+const HERITAGE_MODEL_NEAR_DISTANCE = 6000.0;
+// 이미 생성된 glb는 이 값보다 멀어지면 삭제 (히스테리시스용)
+const HERITAGE_MODEL_FAR_DISTANCE = 7000.0;
 
 /**
  * admin1 레이어 제거
@@ -37,6 +44,138 @@ function clearHeritageLayer(viewer, heritageSourceRef) {
 }
 
 /**
+ * Heritage 포인트 위 glb 모델 관리 시스템 제거
+ */
+function clearHeritageModelSystem(viewer) {
+  if (!viewer) return;
+
+  const ds = viewer.__heritageModelDataSource;
+  if (ds) {
+    viewer.dataSources.remove(ds, true);
+    viewer.__heritageModelDataSource = undefined;
+  }
+
+  const cb = viewer.__heritageModelPostRenderCallback;
+  if (cb) {
+    viewer.scene.postRender.removeEventListener(cb);
+    viewer.__heritageModelPostRenderCallback = undefined;
+  }
+
+  viewer.__heritageModelOptions = undefined;
+}
+
+/**
+ * Heritage 포인트용 glb 모델 매니저 설정
+ * - heritageDs: Heritage_ALL GeoJsonDataSource
+ * - 종목명(국보/민속/보물/사적)에 따라 glb uri 결정
+ * - 카메라 거리에 따라 생성/삭제
+ */
+function setupHeritageModelSystem(viewer, heritageDs) {
+  if (!viewer || !heritageDs) return;
+
+  // 기존 것 싹 정리
+  clearHeritageModelSystem(viewer);
+
+  const modelDs = new Cesium.CustomDataSource("HeritageModels");
+  viewer.dataSources.add(modelDs);
+  viewer.__heritageModelDataSource = modelDs;
+
+  const entities = heritageDs.entities.values;
+  const time = viewer.clock.currentTime;
+  const items = [];
+
+  for (let i = 0; i < entities.length; i++) {
+    const ent = entities[i];
+    const props = ent.properties;
+    if (!props || !ent.position) continue;
+
+    let pos =
+      typeof ent.position.getValue === "function"
+        ? ent.position.getValue(time)
+        : ent.position;
+    if (!pos) continue;
+
+    let categoryProp = props["종목명"];
+    if (!categoryProp) continue;
+
+    const rawCategory =
+      typeof categoryProp.getValue === "function"
+        ? categoryProp.getValue(time)
+        : categoryProp;
+
+    const config = getHeritageModelConfig(rawCategory);
+    if (!config) continue;
+
+    items.push({
+      basePosition: pos,
+      config,
+      modelEntity: null,
+    });
+  }
+
+  viewer.__heritageModelOptions = {
+    items,
+    dataSource: modelDs,
+    nearDistance: HERITAGE_MODEL_NEAR_DISTANCE,
+    farDistance: HERITAGE_MODEL_FAR_DISTANCE,
+  };
+
+  const cb = function () {
+    const opts = viewer.__heritageModelOptions;
+    if (!opts || !opts.items || opts.items.length === 0) return;
+
+    const cameraPos = viewer.camera.positionWC;
+    if (!cameraPos) return;
+
+    for (let i = 0; i < opts.items.length; i++) {
+      const item = opts.items[i];
+      const pos = item.basePosition;
+      if (!pos) continue;
+
+      const dist = Cesium.Cartesian3.distance(cameraPos, pos);
+
+      // 이미 glb가 떠 있는 경우: 너무 멀어지면 삭제
+      if (item.modelEntity) {
+        if (dist > opts.farDistance) {
+          opts.dataSource.entities.remove(item.modelEntity);
+          item.modelEntity = null;
+        }
+        continue;
+      }
+
+      // 아직 glb가 없는 경우: 충분히 가까워지면 생성
+      if (dist < opts.nearDistance) {
+        const cfg = item.config;
+        const liftedPos = raisePositionByHeightOffset(
+          pos,
+          cfg.heightOffset ?? 0
+        );
+        const heading = Cesium.Math.toRadians(cfg.headingDeg ?? 0);
+        const pitch = 0;
+        const roll = 0;
+        const hpr = new Cesium.HeadingPitchRoll(heading, pitch, roll);
+        const orientation =
+          Cesium.Transforms.headingPitchRollQuaternion(liftedPos, hpr);
+
+        const modelEntity = opts.dataSource.entities.add({
+          position: liftedPos,
+          orientation,
+          model: {
+            uri: cfg.uri,
+            scale: cfg.scale ?? 1.0,
+          },
+        });
+
+        item.modelEntity = modelEntity;
+      }
+    }
+  };
+
+  viewer.scene.postRender.addEventListener(cb);
+  viewer.__heritageModelPostRenderCallback = cb;
+}
+
+/**
  * properties에서 시군구 이름을 안전하게 읽는 헬퍼
  */
 function readRegionName(props, time) {
@@ -52,7 +191,7 @@ function readRegionName(props, time) {
       return String(v);
     }
   }
-  
+
   // 혹시 컬럼명이 다른 경우 대비 (필요하면 키만 추가)
   const candidates = ["adm_nm", "SIG_KOR_NM", "시군구명"];
   for (const key of candidates) {
@@ -82,6 +221,25 @@ function raiseLabelPosition(basePos, extrudedHeight) {
   // 기둥 높이 + 여유 500m 정도 위로 올려서 라벨이 기둥 위에 떠 보이게
   const offset = (extrudedHeight || 0) + 500.0;
 
+  carto.height += offset;
+
+  return Cesium.Cartesian3.fromRadians(
+    carto.longitude,
+    carto.latitude,
+    carto.height
+  );
+}
+
+/**
+ * 포인트 위치에서 heightOffset 만큼 위로 올린 worldPosition
+ */
+function raisePositionByHeightOffset(basePos, heightOffset) {
+  if (!basePos || !Cesium.defined(basePos)) return basePos;
+
+  const offset = heightOffset || 0;
+  if (offset === 0) return basePos;
+
+  const carto = Cesium.Cartographic.fromCartesian(basePos);
   carto.height += offset;
 
   return Cesium.Cartesian3.fromRadians(
@@ -206,14 +364,16 @@ export function runAdmin3DModeEffect({
     clearAdmin1Layer(viewer, admin1SourceRef);
     clearAdmin2Layer(viewer, admin2SourceRef);
     clearHeritageLayer(viewer, heritageSourceRef);
+    clearHeritageModelSystem(viewer);
     overlay?.clear();
     return;
   }
 
-  // 3D 모드가 꺼졌으면 admin2 / heritage만 정리
+  // 3D 모드가 꺼졌으면 admin2 / heritage / glb 모델 정리
   if (!admin3DMode) {
     clearAdmin2Layer(viewer, admin2SourceRef);
     clearHeritageLayer(viewer, heritageSourceRef);
+    clearHeritageModelSystem(viewer);
     return;
   }
 
@@ -229,6 +389,7 @@ export function runAdmin3DModeEffect({
         clearAdmin1Layer(viewer, admin1SourceRef);
         clearAdmin2Layer(viewer, admin2SourceRef);
         clearHeritageLayer(viewer, heritageSourceRef);
+        clearHeritageModelSystem(viewer);
 
         // 광역 이름 텍스트 / 기존 단일 오버레이는 밀집도 모드에서 초기화
         overlay?.clear();
@@ -386,14 +547,12 @@ export function runAdmin3DModeEffect({
             bigPositions.push(posArray[j]);
           }
 
-          // 시군구 이름은 Cesium Label 대신 DOM 레이어에 올린다
           if (regionName && overlay && typeof overlay.showRegions === "function") {
             let labelPos =
               ent.position && typeof ent.position.getValue === "function"
                 ? ent.position.getValue(time)
                 : ent.position;
 
-            // position 없으면 폴리곤 중심(bounding sphere center) 사용
             if (!labelPos) {
               const bs = Cesium.BoundingSphere.fromPoints(posArray);
               if (Cesium.defined(bs)) {
@@ -407,7 +566,7 @@ export function runAdmin3DModeEffect({
               labelInfos.push({
                 worldPosition: lifted,
                 text: regionName,
-                fontSizePx: 14, // 밀집도용은 조금 작게
+                fontSizePx: 14,
               });
             }
           }
@@ -429,7 +588,6 @@ export function runAdmin3DModeEffect({
           }
         }
 
-        // 시군구 이름을 DOM 레이어에 한 번에 그려준다
         if (overlay && typeof overlay.showRegions === "function") {
           overlay.showRegions(labelInfos, 14);
         }
@@ -448,6 +606,7 @@ export function runAdmin3DModeEffect({
         clearAdmin1Layer(viewer, admin1SourceRef);
         clearAdmin2Layer(viewer, admin2SourceRef);
         clearHeritageLayer(viewer, heritageSourceRef);
+        clearHeritageModelSystem(viewer);
         overlay?.clear();
 
         // 1단계: kr_admin1에서 bjcd prefix 가져와서 해당 광역의 kr_admin2 전체를 밑 레이어로 띄움
@@ -512,7 +671,6 @@ export function runAdmin3DModeEffect({
                 continue;
               }
 
-              // 밑 레이어 폴리곤 스타일
               poly.material = fillColor2;
               poly.outline = true;
               poly.outlineColor = baseColor2;
@@ -522,7 +680,6 @@ export function runAdmin3DModeEffect({
               const regionName = readRegionName(props, time2);
               if (!regionName) continue;
 
-              // 폴리곤 면적 계산해서 가장 큰 폴리곤 하나만 라벨 타깃으로 사용
               const area = polygonAreaMeters2(posArray);
               const bs = Cesium.BoundingSphere.fromPoints(posArray);
               if (!Cesium.defined(bs)) continue;
@@ -537,7 +694,6 @@ export function runAdmin3DModeEffect({
               }
             }
 
-            // 여기서 실제 라벨은 "타깃으로 골라진 폴리곤"에만 단다
             for (const [regionName, info] of regionLabelTargets.entries()) {
               const { ent, center } = info;
 
@@ -580,7 +736,6 @@ export function runAdmin3DModeEffect({
           const props = ent.properties;
           if (!ent.position) continue;
 
-          // 기본으로 올라오는 파란 풍선/라벨 제거
           ent.billboard = undefined;
           ent.label = undefined;
 
@@ -599,7 +754,6 @@ export function runAdmin3DModeEffect({
                 : nmProp;
           }
 
-          // 포인트 스타일
           ent.point = new Cesium.PointGraphics({
             pixelSize: 10,
             color: Cesium.Color.YELLOW,
@@ -626,7 +780,6 @@ export function runAdmin3DModeEffect({
           }
         }
 
-        // 여기서부터 다시 추가: Heritage 포인트만 클릭 시 DOM 오버레이
         if (!viewer.__heritageClickHandlerInstalled) {
           viewer.__heritageClickHandlerInstalled = true;
 
@@ -639,7 +792,6 @@ export function runAdmin3DModeEffect({
 
               const ent = picked.id;
 
-              // 레이어(폴리곤)는 무시하고, 포인트(노란 점)만 처리
               if (!ent.point || ent.polygon) return;
 
               const props = ent.properties;
@@ -664,6 +816,10 @@ export function runAdmin3DModeEffect({
             Cesium.ScreenSpaceEventType.LEFT_CLICK
           );
         }
+
+        if (cancelled) return;
+
+        setupHeritageModelSystem(viewer, heritageDs);
       } catch (err) {
         console.error("3D 모델 모드 처리 중 오류:", err);
       }
