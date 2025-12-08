@@ -6,12 +6,7 @@ import {
   buildHeritageInAdmin1WfsUrl,
   fetchGeoJson,
 } from "../services/WfsUtil";
-import { getHeritageModelConfig } from "./heritageModelConfig";
-
-// 카메라와 포인트 사이 거리가 이 값보다 작으면 glb 생성
-const HERITAGE_MODEL_NEAR_DISTANCE = 6000.0;
-// 이미 생성된 glb는 이 값보다 멀어지면 삭제 (히스테리시스용)
-const HERITAGE_MODEL_FAR_DISTANCE = 7000.0;
+import { getHeritageModelConfig, HERITAGE_MODEL } from "./heritageModelConfig";
 
 /**
  * admin1 레이어 제거
@@ -61,127 +56,14 @@ function clearHeritageModelSystem(viewer) {
     viewer.__heritageModelPostRenderCallback = undefined;
   }
 
+  // overlay 는 다음 모드에서 다시 세팅
   viewer.__heritageModelOptions = undefined;
 }
 
-/**
- * Heritage 포인트용 glb 모델 매니저 설정
- * - heritageDs: Heritage_ALL GeoJsonDataSource
- * - 종목명(국보/민속/보물/사적)에 따라 glb uri 결정
- * - 카메라 거리에 따라 생성/삭제
- */
-function setupHeritageModelSystem(viewer, heritageDs) {
-  if (!viewer || !heritageDs) return;
-
-  // 기존 것 싹 정리
-  clearHeritageModelSystem(viewer);
-
-  const modelDs = new Cesium.CustomDataSource("HeritageModels");
-  viewer.dataSources.add(modelDs);
-  viewer.__heritageModelDataSource = modelDs;
-
-  const entities = heritageDs.entities.values;
-  const time = viewer.clock.currentTime;
-  const items = [];
-
-  for (let i = 0; i < entities.length; i++) {
-    const ent = entities[i];
-    const props = ent.properties;
-    if (!props || !ent.position) continue;
-
-    let pos =
-      typeof ent.position.getValue === "function"
-        ? ent.position.getValue(time)
-        : ent.position;
-    if (!pos) continue;
-
-    let categoryProp = props["종목명"];
-    if (!categoryProp) continue;
-
-    const rawCategory =
-      typeof categoryProp.getValue === "function"
-        ? categoryProp.getValue(time)
-        : categoryProp;
-
-    const config = getHeritageModelConfig(rawCategory);
-    if (!config) continue;
-
-    items.push({
-      basePosition: pos,
-      config,
-      modelEntity: null,
-    });
-  }
-
-  viewer.__heritageModelOptions = {
-    items,
-    dataSource: modelDs,
-    nearDistance: HERITAGE_MODEL_NEAR_DISTANCE,
-    farDistance: HERITAGE_MODEL_FAR_DISTANCE,
-  };
-
-  const cb = function () {
-    const opts = viewer.__heritageModelOptions;
-    if (!opts || !opts.items || opts.items.length === 0) return;
-
-    const cameraPos = viewer.camera.positionWC;
-    if (!cameraPos) return;
-
-    for (let i = 0; i < opts.items.length; i++) {
-      const item = opts.items[i];
-      const pos = item.basePosition;
-      if (!pos) continue;
-
-      const dist = Cesium.Cartesian3.distance(cameraPos, pos);
-
-      // 이미 glb가 떠 있는 경우: 너무 멀어지면 삭제
-      if (item.modelEntity) {
-        if (dist > opts.farDistance) {
-          opts.dataSource.entities.remove(item.modelEntity);
-          item.modelEntity = null;
-        }
-        continue;
-      }
-
-      // 아직 glb가 없는 경우: 충분히 가까워지면 생성
-      if (dist < opts.nearDistance) {
-        const cfg = item.config;
-        const liftedPos = raisePositionByHeightOffset(
-          pos,
-          cfg.heightOffset ?? 0
-        );
-        const heading = Cesium.Math.toRadians(cfg.headingDeg ?? 0);
-        const pitch = 0;
-        const roll = 0;
-        const hpr = new Cesium.HeadingPitchRoll(heading, pitch, roll);
-        const orientation =
-          Cesium.Transforms.headingPitchRollQuaternion(liftedPos, hpr);
-
-        const modelEntity = opts.dataSource.entities.add({
-          position: liftedPos,
-          orientation,
-          model: {
-            uri: cfg.uri,
-            scale: cfg.scale ?? 1.0,
-          },
-        });
-
-        item.modelEntity = modelEntity;
-      }
-    }
-  };
-
-  viewer.scene.postRender.addEventListener(cb);
-  viewer.__heritageModelPostRenderCallback = cb;
-}
-
-/**
- * properties에서 시군구 이름을 안전하게 읽는 헬퍼
- */
+/** kr_admin2 시군구 이름 읽기 */
 function readRegionName(props, time) {
   if (!props) return null;
 
-  // 1순위: name 컬럼 (kr_admin2 스키마 기준)
   let v = props.name;
   if (v != null) {
     if (typeof v.getValue === "function") {
@@ -192,7 +74,6 @@ function readRegionName(props, time) {
     }
   }
 
-  // 혹시 컬럼명이 다른 경우 대비 (필요하면 키만 추가)
   const candidates = ["adm_nm", "SIG_KOR_NM", "시군구명"];
   for (const key of candidates) {
     v = props[key];
@@ -208,19 +89,12 @@ function readRegionName(props, time) {
   return null;
 }
 
-/**
- * 라벨용 worldPosition을 extrudedHeight 만큼 위로 들어올리는 헬퍼
- * - basePos: 폴리곤 중심(지표면 기준) Cartesian3
- * - extrudedHeight: 폴리곤 extrude 높이(m)
- */
+/** 밀집도 라벨용: extrudedHeight 만큼 위로 올린 위치 */
 function raiseLabelPosition(basePos, extrudedHeight) {
   if (!basePos || !Cesium.defined(basePos)) return basePos;
 
   const carto = Cesium.Cartographic.fromCartesian(basePos);
-
-  // 기둥 높이 + 여유 500m 정도 위로 올려서 라벨이 기둥 위에 떠 보이게
   const offset = (extrudedHeight || 0) + 500.0;
-
   carto.height += offset;
 
   return Cesium.Cartesian3.fromRadians(
@@ -230,9 +104,7 @@ function raiseLabelPosition(basePos, extrudedHeight) {
   );
 }
 
-/**
- * 포인트 위치에서 heightOffset 만큼 위로 올린 worldPosition
- */
+/** 포인트 위치에서 heightOffset 만큼 위로 올린 위치 */
 function raisePositionByHeightOffset(basePos, heightOffset) {
   if (!basePos || !Cesium.defined(basePos)) return basePos;
 
@@ -247,6 +119,207 @@ function raisePositionByHeightOffset(basePos, heightOffset) {
     carto.latitude,
     carto.height
   );
+}
+
+/** Cartesian3[] 폴리곤 면적 m^2 근사 계산 (섬/자잘한 필터링용) */
+function polygonAreaMeters2(positions) {
+  const n = positions.length;
+  if (n < 3) return 0;
+
+  let cx = 0,
+    cy = 0,
+    cz = 0;
+  for (let i = 0; i < n; i++) {
+    const p = positions[i];
+    cx += p.x;
+    cy += p.y;
+    cz += p.z;
+  }
+  cx /= n;
+  cy /= n;
+  cz /= n;
+
+  const center = new Cesium.Cartesian3(cx, cy, cz);
+  const enu = Cesium.Transforms.eastNorthUpToFixedFrame(center);
+  const invEnu = Cesium.Matrix4.inverse(enu, new Cesium.Matrix4());
+
+  const local = [];
+
+  for (let i = 0; i < n; i++) {
+    const p = positions[i];
+    const lp = Cesium.Matrix4.multiplyByPoint(
+      invEnu,
+      p,
+      new Cesium.Cartesian3()
+    );
+    local.push({ x: lp.x, y: lp.y });
+  }
+
+  let area = 0;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    area += local[i].x * local[j].y - local[j].x * local[i].y;
+  }
+
+  return Math.abs(area) * 0.5;
+}
+
+/* ---------------- Heritage glb + 자동 라벨 시스템 ---------------- */
+
+/**
+ * Heritage 포인트용 glb 모델 매니저
+ * - Heritage_ALL GeoJSON 기준
+ * - 종목명(국보/민속/보물/사적)에 따라 glb uri 결정
+ * - 카메라 거리 기반 glb 생성/삭제
+ * - glb 가 있는 포인트 전부에 이름 라벨 표시
+ * - 클릭한 포인트는 폰트 조금 키워서 강조
+ */
+function setupHeritageModelSystem(viewer, heritageDs, overlay) {
+  if (!viewer || !heritageDs) return;
+
+  clearHeritageModelSystem(viewer);
+
+  const modelDs = new Cesium.CustomDataSource("HeritageModels");
+  viewer.dataSources.add(modelDs);
+  viewer.__heritageModelDataSource = modelDs;
+
+  const entities = heritageDs.entities.values;
+  const time = viewer.clock.currentTime;
+  const items = [];
+
+  for (let i = 0; i < entities.length; i++) {
+    const ent = entities[i];
+    const props = ent.properties;
+    if (!props || !ent.position) continue;
+
+    const pos =
+      typeof ent.position.getValue === "function"
+        ? ent.position.getValue(time)
+        : ent.position;
+    if (!pos) continue;
+
+    const rawCategoryProp = props["종목명"];
+    if (!rawCategoryProp) continue;
+
+    const rawCategory =
+      typeof rawCategoryProp.getValue === "function"
+        ? rawCategoryProp.getValue(time)
+        : rawCategoryProp;
+
+    const cfg = getHeritageModelConfig(rawCategory);
+    if (!cfg) continue;
+
+    let nmProp = props["국가유산명"] || props["ccbaMnm1"] || props.name;
+    if (nmProp && typeof nmProp.getValue === "function") {
+      nmProp = nmProp.getValue(time);
+    }
+    const name = nmProp ? String(nmProp) : null;
+
+    items.push({
+      basePosition: pos,           // 포인트 위치
+      modelPosition: null,         // glb 위치 (heightOffset 반영)
+      config: cfg,
+      modelEntity: null,
+      heritageEntity: ent,
+      name,
+    });
+  }
+
+  viewer.__heritageModelOptions = {
+    items,
+    dataSource: modelDs,
+    nearDistance: HERITAGE_MODEL.NEAR_DISTANCE,
+    farDistance: HERITAGE_MODEL.FAR_DISTANCE,
+    overlay,
+    clickedIds: new Set(), // 클릭 강조용
+  };
+
+  const cb = function () {
+    const opts = viewer.__heritageModelOptions;
+    if (!opts || !opts.items || opts.items.length === 0) return;
+
+    const cameraPos = viewer.camera.positionWC;
+    if (!cameraPos) return;
+
+    const { items, dataSource, nearDistance, farDistance, overlay, clickedIds } =
+      opts;
+
+    // 1) 거리 기반으로 glb 생성/삭제 + modelPosition 업데이트
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const pos = item.basePosition;
+      if (!pos) continue;
+
+      const dist = Cesium.Cartesian3.distance(cameraPos, pos);
+      let modelEnt = item.modelEntity;
+
+      if (modelEnt) {
+        if (dist > farDistance) {
+          dataSource.entities.remove(modelEnt);
+          item.modelEntity = null;
+          item.modelPosition = null;
+          modelEnt = null;
+        }
+      }
+
+      if (!modelEnt && dist < nearDistance) {
+        const cfg = item.config;
+        const modelPos = raisePositionByHeightOffset(
+          pos,
+          cfg.heightOffset ?? 0
+        );
+
+        const heading = Cesium.Math.toRadians(cfg.headingDeg ?? 0);
+        const hpr = new Cesium.HeadingPitchRoll(heading, 0, 0);
+        const orientation =
+          Cesium.Transforms.headingPitchRollQuaternion(modelPos, hpr);
+
+        modelEnt = dataSource.entities.add({
+          position: modelPos,
+          orientation,
+          model: {
+            uri: cfg.uri,
+            scale: cfg.scale ?? 1.0,
+          },
+        });
+
+        item.modelEntity = modelEnt;
+        item.modelPosition = modelPos;
+      }
+    }
+
+    if (!overlay) return;
+
+    // 2) glb 가 떠 있는 포인트들 전부에 라벨 표시
+    const labels = [];
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (!item.modelEntity || !item.modelPosition || !item.name) continue;
+
+      const id = item.heritageEntity.id;
+      const isClicked = clickedIds && id != null && clickedIds.has(id);
+
+      labels.push({
+        worldPosition: item.modelPosition,
+        text: item.name,
+        fontSizePx: isClicked ? 18 : 16,
+      });
+    }
+
+    if (labels.length === 0) {
+      if (typeof overlay.clear === "function") overlay.clear();
+    } else if (typeof overlay.showRegions === "function") {
+      overlay.showRegions(labels, 16);
+    } else if (typeof overlay.show === "function") {
+      // showRegions 가 없다면, 일단 첫 것만이라도 표시 (fallback)
+      const first = labels[0];
+      overlay.show(first.worldPosition, first.text, first.fontSizePx || 16);
+    }
+  };
+
+  viewer.scene.postRender.addEventListener(cb);
+  viewer.__heritageModelPostRenderCallback = cb;
 }
 
 /**
@@ -332,7 +405,6 @@ export function runAdmin1BasicEffect({
             ),
           });
 
-          // 광역 이름은 크게
           overlay?.show(bs.center, selectedAdmin1, 35);
         }
       }
@@ -390,8 +462,6 @@ export function runAdmin3DModeEffect({
         clearAdmin2Layer(viewer, admin2SourceRef);
         clearHeritageLayer(viewer, heritageSourceRef);
         clearHeritageModelSystem(viewer);
-
-        // 광역 이름 텍스트 / 기존 단일 오버레이는 밀집도 모드에서 초기화
         overlay?.clear();
 
         // 1단계: kr_admin1에서 bjcd 가져오기
@@ -479,7 +549,7 @@ export function runAdmin3DModeEffect({
             continue;
           }
 
-          const cnt = countsByRegion[regionName] ? countsByRegion[regionName] : 0;
+          const cnt = countsByRegion[regionName] || 0;
           perEntityCount.set(ent, cnt);
           allCounts.push(cnt);
         }
@@ -496,13 +566,11 @@ export function runAdmin3DModeEffect({
           countToHeight[cnt] = baseHeight + (idx + 1) * step;
         });
 
-        // 밀집도 extrude 색 (불투명)
-        const color = Cesium.Color.fromCssColorString("#2563eb");
+        console.log("[DENSITY] extrudedHeight 매핑:", countToHeight);
 
+        const color = Cesium.Color.fromCssColorString("#2563eb");
         const bigPositions = [];
         const minAreaM2 = 8_000_000;
-
-        // DOM 레이어용 레이블 정보
         const labelInfos = [];
 
         for (let i = 0; i < entities.length; i++) {
@@ -529,7 +597,6 @@ export function runAdmin3DModeEffect({
           }
 
           const regionName = readRegionName(props, time);
-
           const cnt = perEntityCount.get(ent) ?? 0;
           const height =
             cnt > 0 && countToHeight[cnt] != null
@@ -562,7 +629,6 @@ export function runAdmin3DModeEffect({
 
             if (labelPos) {
               const lifted = raiseLabelPosition(labelPos, height);
-
               labelInfos.push({
                 worldPosition: lifted,
                 text: regionName,
@@ -571,8 +637,6 @@ export function runAdmin3DModeEffect({
             }
           }
         }
-
-        console.log("[DENSITY] extrudedHeight 매핑:", countToHeight);
 
         if (bigPositions.length > 0) {
           const bs = Cesium.BoundingSphere.fromPoints(bigPositions);
@@ -780,6 +844,7 @@ export function runAdmin3DModeEffect({
           }
         }
 
+        // 클릭 핸들러 (포인트 클릭 시 강조용)
         if (!viewer.__heritageClickHandlerInstalled) {
           viewer.__heritageClickHandlerInstalled = true;
 
@@ -792,16 +857,20 @@ export function runAdmin3DModeEffect({
 
               const ent = picked.id;
 
+              // kr_admin2 폴리곤은 제외하고 Heritage 포인트만
               if (!ent.point || ent.polygon) return;
 
               const props = ent.properties;
               if (!props) return;
 
-              const labelProp = props["국가유산명"] || props.name;
-              const name =
-                labelProp && typeof labelProp.getValue === "function"
-                  ? labelProp.getValue(viewer.clock.currentTime)
-                  : labelProp;
+              const rawLabelProp = props["국가유산명"] || props.name;
+              const labelProp =
+                rawLabelProp &&
+                typeof rawLabelProp.getValue === "function"
+                  ? rawLabelProp.getValue(viewer.clock.currentTime)
+                  : rawLabelProp;
+
+              const name = labelProp ? String(labelProp) : null;
 
               const pos =
                 ent.position &&
@@ -811,7 +880,18 @@ export function runAdmin3DModeEffect({
 
               if (!name || !pos) return;
 
+              // 클릭 시 바로 이름 한 번 보여주는 효과는 유지
               overlay.show(pos, name, 16);
+
+              // glb 자동 라벨 시스템이 있다면, 클릭된 포인트는 폰트를 조금 키워서 강조
+              const opts = viewer.__heritageModelOptions;
+              if (opts && opts.clickedIds && ent.id != null) {
+                if (opts.clickedIds.has(ent.id)) {
+                  opts.clickedIds.delete(ent.id);
+                } else {
+                  opts.clickedIds.add(ent.id);
+                }
+              }
             },
             Cesium.ScreenSpaceEventType.LEFT_CLICK
           );
@@ -819,7 +899,8 @@ export function runAdmin3DModeEffect({
 
         if (cancelled) return;
 
-        setupHeritageModelSystem(viewer, heritageDs);
+        // 카메라 거리 기반 glb + 이름 라벨 시스템
+        setupHeritageModelSystem(viewer, heritageDs, overlay);
       } catch (err) {
         console.error("3D 모델 모드 처리 중 오류:", err);
       }
@@ -829,49 +910,4 @@ export function runAdmin3DModeEffect({
   return () => {
     cancelled = true;
   };
-}
-
-/**
- * Cartesian3[] 폴리곤 면적 m^2 근사 계산 (섬 필터링용)
- */
-function polygonAreaMeters2(positions) {
-  const n = positions.length;
-  if (n < 3) return 0;
-
-  let cx = 0,
-    cy = 0,
-    cz = 0;
-  for (let i = 0; i < n; i++) {
-    const p = positions[i];
-    cx += p.x;
-    cy += p.y;
-    cz += p.z;
-  }
-  cx /= n;
-  cy /= n;
-  cz /= n;
-
-  const center = new Cesium.Cartesian3(cx, cy, cz);
-  const enu = Cesium.Transforms.eastNorthUpToFixedFrame(center);
-  const invEnu = Cesium.Matrix4.inverse(enu, new Cesium.Matrix4());
-
-  const local = [];
-
-  for (let i = 0; i < n; i++) {
-    const p = positions[i];
-    const lp = Cesium.Matrix4.multiplyByPoint(
-      invEnu,
-      p,
-      new Cesium.Cartesian3()
-    );
-    local.push({ x: lp.x, y: lp.y });
-  }
-
-  let area = 0;
-  for (let i = 0; i < n; i++) {
-    const j = (i + 1) % n;
-    area += local[i].x * local[j].y - local[j].x * local[i].y;
-  }
-
-  return Math.abs(area) * 0.5;
 }
