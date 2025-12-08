@@ -1,9 +1,11 @@
+// src/cesium/hooks/useAdminNameOverlay.js
 import * as Cesium from "cesium";
 
 /**
- * 선택된 kr_admin1 중심 위에 텍스트만 띄워주는 경량 오버레이
+ * 선택된 kr_admin1 / 시군구 / 포인트 위에 텍스트만 띄워주는 경량 오버레이
  * - 배경 없음, 글자만 보이도록 처리
  * - viewer.scene.postRender 에서 화면 좌표 갱신
+ * - 단일 레이블(show) + 다중 레이블(showRegions) 둘 다 지원
  */
 export function createAdminNameOverlay(viewer, defaultFontSizePx = 35) {
   const containerId = "admin-name-layer";
@@ -50,11 +52,11 @@ export function createAdminNameOverlay(viewer, defaultFontSizePx = 35) {
     viewer.container.appendChild(layer);
   }
 
-  let record = null; // { el, world }
+  // 단일용, 다중용 따로 관리
+  let singleRecord = null; // { el, world }
+  let multiRecords = [];   // { el, world }[]
 
-  function updatePosition() {
-    if (!record) return;
-
+  function updateElementPosition(record) {
     const { el, world } = record;
     const win = viewer.scene.cartesianToCanvasCoordinates(world, scratch);
     if (!win || !Number.isFinite(win.x) || !Number.isFinite(win.y)) {
@@ -65,13 +67,23 @@ export function createAdminNameOverlay(viewer, defaultFontSizePx = 35) {
     const w = el.offsetWidth || 0;
     const h = el.offsetHeight || 0;
 
-    // 월드 포인트(win.x, win.y)를 텍스트의 하단 중앙
-    const left = win.x - w / 2; // 가운데 = 전체 너비의 절반만큼 왼쪽으로
-    const top = win.y - h;      // 하단 = 전체 높이만큼 위로
+    const left = win.x - w / 2;
+    const top = win.y - h;
 
     el.style.display = "block";
     el.style.left = `${left}px`;
     el.style.top = `${top}px`;
+  }
+
+  function updatePosition() {
+    if (singleRecord) {
+      updateElementPosition(singleRecord);
+    }
+    if (multiRecords.length) {
+      for (const rec of multiRecords) {
+        updateElementPosition(rec);
+      }
+    }
   }
 
   /**
@@ -80,6 +92,8 @@ export function createAdminNameOverlay(viewer, defaultFontSizePx = 35) {
    * fontSizePx: number | undefined
    *   - 전달하면 해당 px로 글자 크기 설정
    *   - 전달하지 않으면 defaultFontSizePx 사용
+   *
+   * 기존처럼 "하나만" 띄우는 용도 (광역 이름, 클릭된 포인트 등)
    */
   function show(worldPosition, text, fontSizePx) {
     clear();
@@ -97,14 +111,59 @@ export function createAdminNameOverlay(viewer, defaultFontSizePx = 35) {
 
     layer.appendChild(el);
 
-    record = { el, world: worldPosition };
+    singleRecord = { el, world: worldPosition };
+    updatePosition();
+  }
+
+  /**
+   * 다중 레이블용
+   * regions: Array<{ worldPosition: Cartesian3, text: string, fontSizePx?: number }>
+   * defaultFontSizeForRegions: number | undefined
+   */
+  function showRegions(regions, defaultFontSizeForRegions) {
+    clear();
+    if (!Array.isArray(regions) || regions.length === 0) return;
+
+    const baseFontSize =
+      typeof defaultFontSizeForRegions === "number" &&
+      defaultFontSizeForRegions > 0
+        ? defaultFontSizeForRegions
+        : defaultFontSizePx;
+
+    const newRecords = [];
+
+    for (const item of regions) {
+      if (!item || !item.worldPosition) continue;
+
+      const text = item.text ?? "";
+      const size =
+        typeof item.fontSizePx === "number" && item.fontSizePx > 0
+          ? item.fontSizePx
+          : baseFontSize;
+
+      const el = document.createElement("div");
+      el.className = "admin-name-label";
+      el.textContent = text;
+      el.style.fontSize = `${size}px`;
+
+      layer.appendChild(el);
+      newRecords.push({ el, world: item.worldPosition });
+    }
+
+    multiRecords = newRecords;
     updatePosition();
   }
 
   function clear() {
-    if (record) {
-      record.el.remove();
-      record = null;
+    if (singleRecord) {
+      singleRecord.el.remove();
+      singleRecord = null;
+    }
+    if (multiRecords.length) {
+      for (const rec of multiRecords) {
+        rec.el.remove();
+      }
+      multiRecords = [];
     }
   }
 
@@ -115,5 +174,5 @@ export function createAdminNameOverlay(viewer, defaultFontSizePx = 35) {
     });
   }
 
-  return { show, clear };
+  return { show, showRegions, clear };
 }

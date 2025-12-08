@@ -132,6 +132,19 @@ const MapComponent: React.FC = () => {
   // 3D 행정구역 표현 모드 (밀집도 / 3D 모델)
   const [admin3DMode, setAdmin3DMode] = useState<Admin3DMode | null>(null);
 
+  // 2D/3D 모드 변경 핸들러
+  const handleChangeMapMode = (nextMode: MapMode) => {
+    if (nextMode === mapMode) return;
+
+    // 3D → 2D로 내려갈 때 Cesium 관련 선택 상태 초기화
+    if (nextMode === "2d") {
+      setSelectedAdmin1(null);
+      setAdmin3DMode(null);
+    }
+
+    setMapMode(nextMode);
+  };
+
   // 검색 결과 레이어 관리
   const searchResultSourceRef = useRef<VectorSource | null>(null);
   const searchResultLayerRef = useRef<VectorLayer<VectorSource> | null>(null);
@@ -961,7 +974,7 @@ const MapComponent: React.FC = () => {
             onLocationClick={handleLocationClick}
             onSearchResults={handleSearchResults}
             mapMode={mapMode}
-            onChangeMapMode={setMapMode}
+            onChangeMapMode={handleChangeMapMode}
             admin1Options={admin1Options}
             selectedAdmin1={selectedAdmin1}
             onChangeAdmin1={setSelectedAdmin1}
