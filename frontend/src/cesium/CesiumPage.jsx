@@ -32,7 +32,8 @@ export default function CesiumPage({
     if (!containerRef.current) return;
     if (viewerRef.current) return;
 
-    Cesium.Ion.defaultAccessToken = import.meta.env.VITE_CESIUM_ION_TOKEN;
+    // cesium ion token 설정
+    // Cesium.Ion.defaultAccessToken = import.meta.env.VITE_CESIUM_ION_TOKEN;
 
     const viewer = new Cesium.Viewer(containerRef.current, {
       geocoder: false,              // 검색창
