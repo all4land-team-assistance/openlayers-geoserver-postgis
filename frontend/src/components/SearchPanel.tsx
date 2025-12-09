@@ -37,7 +37,7 @@ const SearchPanel: React.FC<SearchPanelProps> = ({
 
     try {
       const response = await fetch(
-        `${API_BASE_URL}/search/heritage?keyword=${encodeURIComponent(keyword)}`
+        `https://openlayers-geoserver-postgis-1062011697563.europe-west1.run.app/api/search/heritage?keyword=${encodeURIComponent(keyword)}`
       );
 
       if (!response.ok) {
