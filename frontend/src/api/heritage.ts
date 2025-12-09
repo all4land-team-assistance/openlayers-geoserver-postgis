@@ -64,7 +64,7 @@ async function fetchListXML(kdcd: string, ctcd: string, name: string) {
 async function fetchDetailXMLViaProxy(kdcd: string, asno: string, ctcd: string) {
   // 프록시에는 kdcd/asno/ctcd 키로 통일
   const qs = new URLSearchParams({ kdcd, asno, ctcd }).toString();
-  const url = `https://sbsj.vercel.app/api/heritage/detail?${qs}`;
+  const url = `/api/heritage/detail?${qs}`;
   const r = await fetch(url);
   if (!r.ok) throw new Error(`Detail ${r.status}`);
   return await r.text();
