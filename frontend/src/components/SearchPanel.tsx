@@ -7,10 +7,6 @@ import type { SearchPanelProps, SearchResultItem } from "../types";
 import styles from "./SearchPanel.module.css";
 import commonStyles from "../styles/common.module.css";
 
-// 백엔드 API 베이스 URL은 Vite 환경변수로 설정 (없으면 기본 '/api')
-// 예: VITE_API_BASE_URL="http://localhost:3000/api" 또는 "/api"
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
-
 const SearchPanel: React.FC<SearchPanelProps> = ({
   onSearch,
   onLocationClick,
