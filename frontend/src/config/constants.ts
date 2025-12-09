@@ -7,7 +7,7 @@
 // CORS 문제를 피하기 위해 항상 로컬 프록시(/api/geoserver) 사용
 // 백엔드 서버(backend/server.js)가 배포 서버로 프록시함
 // 배포 서버: http://34.47.92.35/geoserver (백엔드 프록시를 통해 접근)
-export const GEOSERVER_URL = "/api/geoserver";
+export const GEOSERVER_URL = import.meta.env.VITE_GEOSERVER_URL || "/api/geoserver";
 export const WORKSPACE = import.meta.env.VITE_GEOSERVER_WORKSPACE || "sbsj";
 
 // 시명 한글화 매핑 (이슈 #2 컨벤션 기반)
