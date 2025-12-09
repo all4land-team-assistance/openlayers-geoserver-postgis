@@ -9,7 +9,7 @@ const app = express();
 app.use(express.json());
 
 // Vite 개발 서버(5173)에서 호출 허용
-app.use(cors({ origin: ["http://localhost:5173", "http://127.0.0.1:5173"] }));
+app.use(cors({ origin: ["https://sbsj.vercel.app", "https://openlayers-geoserver-postgis-l0hp9zcun.vercel.app"] }));
 
 // PostgreSQL 연결 설정
 // 환경변수가 있으면 우선 사용, 없으면 제공된 기본값 사용
