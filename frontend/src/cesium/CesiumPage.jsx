@@ -107,17 +107,254 @@ export default function CesiumPage({
   useEffect(() => {
     const viewer = viewerRef.current;
     if (!viewer) return;
-
-    const overlay = adminNameOverlayRef.current;
-
-    return runAdmin1BasicEffect({
-      viewer,
-      overlay,
-      selectedAdmin1,
-      admin3DMode,
-      admin1SourceRef,
+  
+    let ds = searchResultDsRef.current;
+    if (!ds) {
+      ds = new Cesium.CustomDataSource("search-results");
+  
+      // 기본 클러스터 설정
+      ds.clustering.enabled = true;
+      ds.clustering.pixelRange = 32;
+      ds.clustering.minimumClusterSize = 2;
+  
+      // 클러스터 스타일 설정
+      ds.clustering.clusterEvent.addEventListener((clusteredEntities, cluster) => {
+        cluster.billboard.show = true;
+        cluster.label.show = true;
+        cluster.point.show = false;
+  
+        cluster.billboard.image = makeCircleDataUrl({
+          size: 48,
+          color: "rgba(59,130,246,0.95)",
+          stroke: "rgba(12,53,112,0.9)",
+        });
+        cluster.billboard.width = 48;
+        cluster.billboard.height = 48;
+        cluster.billboard.verticalOrigin = Cesium.VerticalOrigin.CENTER;
+        cluster.billboard.disableDepthTestDistance = Number.POSITIVE_INFINITY;
+  
+        cluster.label.text = String(clusteredEntities.length);
+        cluster.label.font =
+          "700 14px 'Noto Sans KR', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+        cluster.label.fillColor = Cesium.Color.WHITE;
+        cluster.label.outlineColor = Cesium.Color.BLACK;
+        cluster.label.outlineWidth = 3;
+        cluster.label.style = Cesium.LabelStyle.FILL_AND_OUTLINE;
+        cluster.label.pixelOffset = new Cesium.Cartesian2(0, 0);
+        cluster.label.disableDepthTestDistance = Number.POSITIVE_INFINITY;
+        cluster.label.heightReference = Cesium.HeightReference.NONE;
+      });
+  
+      viewer.dataSources.add(ds);
+      searchResultDsRef.current = ds;
+    }
+  
+    // === 카메라 높이에 따라 클러스터 강도/ON-OFF 조절 ===
+    const updateClusteringByCamera = () => {
+      if (!viewer || !ds || !viewer.scene || !viewer.scene.camera) return;
+      const camera = viewer.scene.camera;
+      const carto = camera.positionCartographic;
+      const height = carto ? carto.height : Number.POSITIVE_INFINITY;
+  
+      if (height > 200000) {
+        ds.clustering.enabled = true;
+        ds.clustering.pixelRange = 40;
+        ds.clustering.minimumClusterSize = 2;
+      } else if (height > 80000) {
+        ds.clustering.enabled = true;
+        ds.clustering.pixelRange = 25;
+        ds.clustering.minimumClusterSize = 2;
+      } else {
+        // 시/군·동 수준까지 내려오면: 클러스터 끔 → 개별 아이콘만
+        ds.clustering.enabled = false;
+      }
+    };
+  
+    // 최초 한 번 적용
+    updateClusteringByCamera();
+  
+    // 안전한 camera listener 등록: camera 참조를 보관해서 cleanup에서 같은 참조로 해제
+    let cameraTarget = null;
+    if (viewer.scene && viewer.scene.camera) {
+      cameraTarget = viewer.scene.camera;
+      try {
+        cameraTarget.changed.addEventListener(updateClusteringByCamera);
+      } catch (e) {
+        console.warn("[search-results] camera.changed addEventListener 실패:", e);
+      }
+    }
+  
+    // 엔티티 초기화 및 추가 (기존 로직을 유지하되 방어적 검사 포함)
+    ds.entities.removeAll();
+  
+    const markerImage = makeCircleDataUrl({
+      size: 32,
+      color: "rgba(34,197,94,0.95)",
+      stroke: "rgba(6,95,70,0.9)",
     });
-  }, [selectedAdmin1, admin3DMode]);
+  
+    (searchResults || []).forEach((item) => {
+      const { lon, lat, name } = item;
+      if (typeof lon !== "number" || typeof lat !== "number") return;
+      const ent = ds.entities.add({
+        position: Cesium.Cartesian3.fromDegrees(lon, lat),
+        billboard: {
+          image: markerImage,
+          width: 32,
+          height: 32,
+          verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+          heightReference: Cesium.HeightReference.NONE,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+        label: { show: false },
+        name,
+      });
+      ent.properties = item; // 원본 데이터 보존
+    });
+  
+    // === 클릭 이벤트: 클러스터/단일 분기 ===
+    let removeClickHandler = null;
+    if (onSearchResultClick) {
+      const handler = viewer.screenSpaceEventHandler;
+      if (handler && typeof handler.setInputAction === "function") {
+        const clickCallback = (movement) => {
+          // 안전 검사: viewer & scene 존재 여부
+          if (!viewer || !viewer.scene) return;
+          if (!movement || !movement.position) return;
+  
+          let picked;
+          try {
+            picked = viewer.scene.pick(movement.position);
+          } catch (e) {
+            // pick에서 예외가 나올 가능성도 방어
+            console.warn("[search-results click] pick 실패:", e);
+            return;
+          }
+          if (!Cesium.defined(picked) || !picked.id) return;
+  
+          const ent = picked.id;
+  
+          // cluster 멤버 찾기 (Cesium 내부 구조가 다양할 수 있어 여러 케이스 방어)
+          const clusterMembers =
+            ent._clusteredEntities ||
+            ent.clusteredEntities ||
+            (ent.cluster && ent.cluster.clusteredEntities) ||
+            null;
+  
+          // 다중일 경우: 영역 줌 인
+          if (clusterMembers && Array.isArray(clusterMembers) && clusterMembers.length > 1) {
+            const positions = clusterMembers
+              .map((ce) => {
+                try {
+                  return ce.position && ce.position.getValue && ce.position.getValue(viewer.clock.currentTime);
+                } catch (e) {
+                  return null;
+                }
+              })
+              .filter(Boolean);
+  
+            if (positions.length > 0) {
+              try {
+                const bs = Cesium.BoundingSphere.fromPoints(positions);
+                if (Cesium.defined(bs) && bs.radius > 0) {
+                  const camera = viewer.camera;
+                  viewer.camera.flyToBoundingSphere(bs, {
+                    duration: 0.8,
+                    offset: new Cesium.HeadingPitchRange(
+                      camera.heading,
+                      camera.pitch,
+                      bs.radius * 1.5
+                    ),
+                  });
+                }
+              } catch (e) {
+                console.warn("[search-results cluster zoom] 실패:", e);
+              }
+            }
+            return;
+          }
+  
+          // 단일 클러스터(멤버 개수 1)일 때 멤버의 properties로 상세 호출
+          if (clusterMembers && Array.isArray(clusterMembers) && clusterMembers.length === 1) {
+            const single = clusterMembers[0];
+            if (!single) return;
+            const props = single.properties;
+            if (!props) return;
+            try {
+              const item =
+                typeof props.getValue === "function"
+                  ? props.getValue(viewer.clock.currentTime)
+                  : props;
+              onSearchResultClick(item);
+            } catch (e) {
+              console.warn("[search-results single-cluster click] props 읽기 실패:", e);
+            }
+            return;
+          }
+  
+          // 그 외 단일 엔티티(원본) 처리
+          if (!ds.entities.contains(ent)) return;
+          const props = ent.properties;
+          if (!props) return;
+          try {
+            const item = typeof props.getValue === "function"
+              ? props.getValue(viewer.clock.currentTime)
+              : props;
+            onSearchResultClick(item);
+          } catch (e) {
+            console.warn("[search-results click] props 읽기 실패:", e);
+          }
+        };
+  
+        // 등록
+        try {
+          handler.setInputAction(clickCallback, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+          removeClickHandler = () => {
+            try {
+              if (handler && typeof handler.removeInputAction === "function") {
+                handler.removeInputAction(Cesium.ScreenSpaceEventType.LEFT_CLICK);
+              }
+            } catch (e) {
+              // handler가 이미 destroy 되었을 수 있음
+            }
+          };
+        } catch (e) {
+          console.warn("[search-results] click handler 등록 실패:", e);
+        }
+      }
+    }
+  
+    // cleanup
+    return () => {
+      // 데이터소스 안전 제거
+      try {
+        if (ds && viewer && viewer.dataSources) {
+          viewer.dataSources.remove(ds, true);
+        }
+      } catch (e) {
+        // ignore
+      }
+      // 클릭 핸들러 안전 제거
+      try {
+        if (removeClickHandler) removeClickHandler();
+      } catch (e) {
+        // ignore
+      }
+      // 이전에 바인딩한 camera listener를 같은 참조로 제거
+      try {
+        if (cameraTarget && cameraTarget.changed && typeof cameraTarget.changed.removeEventListener === "function") {
+          cameraTarget.changed.removeEventListener(updateClusteringByCamera);
+        }
+      } catch (e) {
+        // ignore
+      }
+  
+      // 로컬 ref 정리
+      if (searchResultDsRef.current === ds) {
+        searchResultDsRef.current = null;
+      }
+    };
+  }, [searchResults, onSearchResultClick]);
 
   // 밀집도 / 3D 모델 모드
   useEffect(() => {
