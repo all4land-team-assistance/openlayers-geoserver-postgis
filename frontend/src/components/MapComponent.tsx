@@ -89,12 +89,6 @@ function getIconByType(rawType?: string): string {
   return "/icons/보물.svg";
 }
 
-// <b> 태그만 제거 (내용은 유지)
-function removeBoldTags(text?: string) {
-  if (!text) return "";
-  return text.replace(/<\/?b>/gi, "");
-}
-
 // 현재 줌 기준 단일 피처 스타일(아이콘/점 전환)
 function makeSinglePointStyle(props: any, map?: OLMap): Style {
   const zoom = map?.getView().getZoom?.() ?? 0;
@@ -169,7 +163,6 @@ const MapComponent: React.FC = () => {
 
   // 검색 결과 레이어 관리 (2D) + 3D 전달용 상태
   const searchResultSourceRef = useRef<VectorSource | null>(null);
-  const searchResultLayerRef = useRef<VectorLayer<VectorSource> | null>(null);
   const [searchResults3d, setSearchResults3d] = useState<SearchResultItem[]>([]);
   const [flyToLocation3d, setFlyToLocation3d] = useState<[number, number] | null>(null);
 
