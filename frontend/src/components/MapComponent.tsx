@@ -48,8 +48,9 @@ import { findBestDetail, ctcdBySidoName, type Detail } from "../api/heritage";
 
 // ---- 설정값 ----
 const SCALE_CLUSTER = 18000; // 1:18,000보다 멀리서 보면 클러스터
-const ICON_ZOOM_THRESHOLD = 10; // 줌 10 이상에서만 아이콘 표시
+const ICON_ZOOM_THRESHOLD = 9; // 줌 9 이상에서만 아이콘 표시
 const ICON_SCALE = 0.1; // 아이콘 크기
+const CLUSTER_DISABLE_ZOOM = 11;
 
 // 스케일 계산 유틸
 const DPI = 96;
@@ -61,6 +62,23 @@ function resolutionToScale(map: OLMap) {
   return res * metersPerUnit * DPI * INCH_PER_M;
 }
 
+function shouldUseCluster(map: OLMap) {
+  const scale = resolutionToScale(map);
+  const zoom = map.getView().getZoom?.() ?? 0;
+
+  const isFar = scale > SCALE_CLUSTER;
+  const isTooClose = zoom >= CLUSTER_DISABLE_ZOOM;
+
+  return isFar && !isTooClose;
+}
+
+function getClusterDistance(zoom: number) {
+  if (zoom < 7) return 40;
+  if (zoom < 9) return 30;
+  if (zoom < 11) return 20;
+  return 10;
+}
+
 // 문화재 유형 → 아이콘 파일 매핑
 function getIconByType(rawType?: string): string {
   const t = String(rawType || "");
@@ -69,6 +87,12 @@ function getIconByType(rawType?: string): string {
   if (t.includes("민속")) return "/icons/민속.svg";
   if (t.includes("사적")) return "/icons/사적.svg";
   return "/icons/보물.svg";
+}
+
+// <b> 태그만 제거 (내용은 유지)
+function removeBoldTags(text?: string) {
+  if (!text) return "";
+  return text.replace(/<\/?b>/gi, "");
 }
 
 // 현재 줌 기준 단일 피처 스타일(아이콘/점 전환)
@@ -114,8 +138,6 @@ const MapComponent: React.FC = () => {
   const [typeLayers, setTypeLayers] = useState<LayerInfo[]>([]); // 유형별 레이어
   const [locationLayers, setLocationLayers] = useState<LayerInfo[]>([]); // 소재지별 레이어
 
-  const [visibleLayers, setVisibleLayers] = useState<Set<string>>(new Set());
-
   // 지도 모드 (2D / 3D)
   const [mapMode, setMapMode] = useState<MapMode>("2d");
 
@@ -153,25 +175,51 @@ const MapComponent: React.FC = () => {
 
   const handleToggleLayerPanel = () => setIsLayerPanelOpen(!isLayerPanelOpen);
 
+  // 그룹용 (UI)
+  const [visibleLayers, setVisibleLayers] = useState<Set<string>>(new Set());
+
+  // 실제 켜진 레이어의 baseName 리스트
+  const activeBaseLayersRef = useRef<Set<string>>(new Set());
+
   // 레이어 표시/숨김 헬퍼 함수
   const toggleLayerVisibility = (baseName: string, turnOn: boolean) => {
     const pin = layersMapRef.current.get(baseName + ":pin");
     const cluster = layersMapRef.current.get(baseName + ":cluster");
 
     if (turnOn) {
+      activeBaseLayersRef.current.add(baseName);
       if (mapInstanceRef.current) {
-        const useCluster =
-          resolutionToScale(mapInstanceRef.current) > SCALE_CLUSTER;
+        const useCluster = shouldUseCluster(mapInstanceRef.current);
         if (pin) pin.setVisible(!useCluster);
         if (cluster) cluster.setVisible(useCluster);
       } else {
         if (pin) pin.setVisible(true);
       }
     } else {
+      activeBaseLayersRef.current.delete(baseName);
       if (pin) pin.setVisible(false);
       if (cluster) cluster.setVisible(false);
     }
   };
+
+  // const toggleLayerVisibility = (baseName: string, turnOn: boolean) => {
+  //   const pin = layersMapRef.current.get(baseName + ":pin");
+  //   const cluster = layersMapRef.current.get(baseName + ":cluster");
+
+  //   if (turnOn) {
+  //     if (mapInstanceRef.current) {
+  //       const useCluster =
+  //         resolutionToScale(mapInstanceRef.current) > SCALE_CLUSTER;
+  //       if (pin) pin.setVisible(!useCluster);
+  //       if (cluster) cluster.setVisible(useCluster);
+  //     } else {
+  //       if (pin) pin.setVisible(true);
+  //     }
+  //   } else {
+  //     if (pin) pin.setVisible(false);
+  //     if (cluster) cluster.setVisible(false);
+  //   }
+  // };
 
   // 레이어 그룹 토글 시 해당 그룹의 모든 레이어를 토글 (유형별/소재지별)
   const handleToggleLayer = (groupName: string) => {
@@ -439,6 +487,7 @@ const MapComponent: React.FC = () => {
         // 국보, 민속, 사적, 보물만 로드
         if (koreanType && TARGET_LAYER_GROUPS.includes(koreanType)) {
           const layerName = parsed.layerName;
+          console.log("➡ load vector layer:", layerName, "/", koreanType);
           const vectorSource = new VectorSource({
             url: `${GEOSERVER_URL}/wfs?service=WFS&version=1.1.0&request=GetFeature&typeName=${WORKSPACE}:${layerName}&outputFormat=application/json&srsName=EPSG:4326`,
             format: new GeoJSON({
@@ -523,20 +572,36 @@ const MapComponent: React.FC = () => {
 
       // 검색 결과 레이어
       const searchResultSource = new VectorSource();
+
+      // 클러스터
       const searchResultClusterSource = new Cluster({
         distance: 40,
         source: searchResultSource,
       });
 
-      const searchResultLayer = new VectorLayer({
-        source: searchResultClusterSource,
+      // 개별 핀 레이어
+      const searchResultPinLayer = new VectorLayer({
+        source: searchResultSource,
         visible: true,
-        className: "search-results",
+        className: "search-results-pin",
+        style: (feature) => {
+          const props = feature.getProperties();
+          return makeSinglePointStyle(
+            props,
+            mapInstanceRef.current || undefined
+          );
+        },
+      });
+
+      // 클러스터 레이어
+      const searchResultClusterLayer = new VectorLayer({
+        source: searchResultClusterSource,
+        visible: false,
+        className: "search-results-cluster",
         style: (feature) => {
           const clusterFeatures = feature.get("features");
           const size = clusterFeatures?.length || 0;
 
-          // 클러스터인 경우
           if (size > 1) {
             const r = Math.max(18, Math.min(44, 12 + Math.log(size) * 10));
             return new Style({
@@ -547,7 +612,8 @@ const MapComponent: React.FC = () => {
               }),
               text: new Text({
                 text: String(size),
-                font: "700 14px system-ui, -apple-system, Segoe UI, Roboto",
+                font:
+                  "700 14px system-ui, -apple-system, Segoe UI, Roboto",
                 fill: new Fill({ color: "#fff" }),
                 stroke: new Stroke({
                   color: "rgba(0,0,0,0.35)",
@@ -557,7 +623,6 @@ const MapComponent: React.FC = () => {
             });
           }
 
-          // 단일 마커인 경우
           const props =
             clusterFeatures?.[0]?.getProperties() || feature.getProperties();
           return makeSinglePointStyle(
@@ -566,13 +631,17 @@ const MapComponent: React.FC = () => {
           );
         },
       });
-      searchResultSourceRef.current = searchResultSource;
-      searchResultLayerRef.current = searchResultLayer;
 
-      // 맵 생성
+      searchResultSourceRef.current = searchResultSource;
+      
       const map = new OLMap({
         target: mapRef.current!,
-        layers: [osmLayer, searchResultLayer, ...olLayers],
+        layers: [
+          osmLayer,
+          searchResultClusterLayer,
+          searchResultPinLayer,
+          ...olLayers,
+        ],
         view: new View({
           center: fromLonLat([126.978, 37.5665]),
           zoom: 8,
@@ -583,15 +652,60 @@ const MapComponent: React.FC = () => {
 
       // 줌/스케일에 따른 클러스터 <-> 핀 전환
       const updateClusterVisibility = () => {
-        const useCluster = resolutionToScale(map) > SCALE_CLUSTER;
-        visibleLayers.forEach((baseName) => {
+        const useCluster = shouldUseCluster(map);
+        const zoom = map.getView().getZoom() ?? 0;
+
+        // 문화재 레이어 토글
+        activeBaseLayersRef.current.forEach((baseName) => {
           const pin = layersMapRef.current.get(baseName + ":pin");
-          const cluster = layersMapRef.current.get(baseName + ":cluster");
-          if (pin) pin.setVisible(!useCluster);
-          if (cluster) cluster.setVisible(useCluster);
+          const cluster = layersMapRef.current.get(
+            baseName + ":cluster"
+          ) as VectorLayer<any>;
+
+          if (cluster) {
+            const src = cluster.getSource() as Cluster;
+            if (src) {
+              src.setDistance(getClusterDistance(zoom));
+            }
+            cluster.setVisible(useCluster);
+          }
+
+          if (pin) {
+            pin.setVisible(!useCluster);
+          }
         });
+
+        // 검색 결과 레이어 토글
+        const allLayers = map.getLayers().getArray();
+
+        const srPin = allLayers.find((l: any) => {
+          const cls =
+            l.get?.("className") ?? l.getClassName?.();
+          return cls === "search-results-pin";
+        }) as VectorLayer<any> | undefined;
+
+        const srCluster = allLayers.find((l: any) => {
+          const cls =
+            l.get?.("className") ?? l.getClassName?.();
+          return cls === "search-results-cluster";
+        }) as VectorLayer<any> | undefined;
+
+        if (srCluster) {
+          const src = srCluster.getSource() as Cluster;
+          if (src) {
+            src.setDistance(getClusterDistance(zoom));
+          }
+          srCluster.setVisible(useCluster);
+        }
+
+        if (srPin) {
+          srPin.setVisible(!useCluster);
+        }
+
         map.renderSync();
       };
+
+
       map.getView().on("change:resolution", updateClusterVisibility);
       updateClusterVisibility();
 
@@ -747,20 +861,6 @@ const MapComponent: React.FC = () => {
       if (cleanup) cleanup();
     };
   }, []);
-
-  // 패널에서 토글될 때만 클러스터/핀 표시 상태 다시 계산
-  useEffect(() => {
-    const map = mapInstanceRef.current;
-    if (!map) return;
-    const useCluster = resolutionToScale(map) > SCALE_CLUSTER;
-    visibleLayers.forEach((baseName: string) => {
-      const pin = layersMapRef.current.get(baseName + ":pin");
-      const cluster = layersMapRef.current.get(baseName + ":cluster");
-      if (pin) pin.setVisible(!useCluster);
-      if (cluster) cluster.setVisible(useCluster);
-    });
-    map.renderSync();
-  }, [visibleLayers]);
 
   // 검색 결과 클릭 시 지도 이동 (2D는 OL, 3D는 Cesium에 전달)
   const handleLocationClick = (coordinates: [number, number]) => {

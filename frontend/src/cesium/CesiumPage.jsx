@@ -39,36 +39,31 @@ export default function CesiumPage({
     if (!containerRef.current) return;
     if (viewerRef.current) return;
 
-    // cesium ion token 설정
-    // Cesium.Ion.defaultAccessToken = import.meta.env.VITE_CESIUM_ION_TOKEN;
-
     const viewer = new Cesium.Viewer(containerRef.current, {
-      geocoder: false,              // 검색창
-      homeButton: false,            // 집 모양 버튼
-      sceneModePicker: false,       // 2D/3D 모든 변환
-      baseLayerPicker: false,       // 베이스 맴 선택
-      navigationHelpButton: false,  // 도움말 버튼
-      timeline: false,              // 하단 타임라인 버튼
-      animation: false,             // 애니메이션 컨롤러
-      fullscreenButton: false,      // 전체 화면
-      infoBox: false,               // 픽셀 정보 박스 제거
-      selectionIndicator: false,    // 클릭 테두리 제거
-      
-      // 실제 월드 지형 terrain 활성화(rough data)
-      // terrain: Cesium.Terrain.fromWorldTerrain(),
-
-      // osm를 base로 할 경우 활성화
-      // baseLayer: Cesium.ImageryLayer.fromProviderAsync(osm),
+      geocoder: false,
+      homeButton: false,
+      sceneModePicker: false,
+      baseLayerPicker: false,
+      navigationHelpButton: false,
+      timeline: false,
+      animation: false,
+      fullscreenButton: false,
+      infoBox: false,
+      selectionIndicator: false,
+      // terrain / baseLayer 필요하면 여기서 설정
     });
     viewerRef.current = viewer;
-    // 심볼/클러스터가 지형/타일에 가려지지 않도록
+
+    // 지형에 가리지 않도록
     viewer.scene.globe.depthTestAgainstTerrain = false;
     if (viewer.scene.postProcessStages?.fxaa) {
       viewer.scene.postProcessStages.fxaa.enabled = true;
     }
-    // 기본 폰트 35px, 포인트/작은 지역은 show(..., 글자크기)로 조절
+
+    // 광역 이름 오버레이
     adminNameOverlayRef.current = createAdminNameOverlay(viewer, 35);
 
+    // 초기 카메라 위치 (대한민국 전체)
     viewer.camera.setView({
       destination: Cesium.Cartesian3.fromDegrees(126.978, 37.5665, 600000.0),
       orientation: {
@@ -93,6 +88,10 @@ export default function CesiumPage({
       if (heritageSourceRef.current) {
         v.dataSources.remove(heritageSourceRef.current, true);
         heritageSourceRef.current = null;
+      }
+      if (searchResultDsRef.current) {
+        v.dataSources.remove(searchResultDsRef.current, true);
+        searchResultDsRef.current = null;
       }
       if (adminNameOverlayRef.current) {
         adminNameOverlayRef.current.clear();
@@ -141,6 +140,8 @@ export default function CesiumPage({
   /**
    * 검색 결과를 3D에 마커 + 클러스터로 표시
    * - billboard 기반으로 entity clustering 사용
+   * - 카메라 높이에 따라 클러스터 강도/ON-OFF 조절
+   * - 클러스터 클릭: 다중 → 해당 영역 줌 인, 단일 → 상세 패널
    */
   useEffect(() => {
     const viewer = viewerRef.current;
@@ -185,41 +186,73 @@ export default function CesiumPage({
     let ds = searchResultDsRef.current;
     if (!ds) {
       ds = new Cesium.CustomDataSource("search-results");
-      // 클러스터링 비활성화 (요청)
-      // ds.clustering.enabled = true;
-      // ds.clustering.pixelRange = 32;
-      // ds.clustering.minimumClusterSize = 2;
-      //
-      // ds.clustering.clusterEvent.addEventListener((clusteredEntities, cluster) => {
-      //   cluster.billboard.show = true;
-      //   cluster.label.show = true;
-      //   cluster.point.show = false;
-      //
-      //   cluster.billboard.image = makeCircleDataUrl({
-      //     size: 48,
-      //     color: "rgba(59,130,246,0.95)",
-      //     stroke: "rgba(12,53,112,0.9)",
-      //   });
-      //   cluster.billboard.width = 48;
-      //   cluster.billboard.height = 48;
-      //   cluster.billboard.verticalOrigin = Cesium.VerticalOrigin.CENTER;
-      //   cluster.billboard.disableDepthTestDistance = Number.POSITIVE_INFINITY;
-      //
-      //   cluster.label.text = String(clusteredEntities.length);
-      //   cluster.label.font =
-      //     "700 14px 'Noto Sans KR', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
-      //   cluster.label.fillColor = Cesium.Color.WHITE;
-      //   cluster.label.outlineColor = Cesium.Color.BLACK;
-      //   cluster.label.outlineWidth = 3;
-      //   cluster.label.style = Cesium.LabelStyle.FILL_AND_OUTLINE;
-      //   cluster.label.pixelOffset = new Cesium.Cartesian2(0, 0);
-      //   cluster.label.disableDepthTestDistance = Number.POSITIVE_INFINITY;
-      //   cluster.label.heightReference = Cesium.HeightReference.NONE;
-      // });
+
+      // 기본 클러스터 설정
+      ds.clustering.enabled = true;
+      ds.clustering.pixelRange = 32;
+      ds.clustering.minimumClusterSize = 2;
+
+      // 클러스터 스타일 설정
+      ds.clustering.clusterEvent.addEventListener(
+        (clusteredEntities, cluster) => {
+          cluster.billboard.show = true;
+          cluster.label.show = true;
+          cluster.point.show = false;
+
+          cluster.billboard.image = makeCircleDataUrl({
+            size: 48,
+            color: "rgba(59,130,246,0.95)",
+            stroke: "rgba(12,53,112,0.9)",
+          });
+          cluster.billboard.width = 48;
+          cluster.billboard.height = 48;
+          cluster.billboard.verticalOrigin = Cesium.VerticalOrigin.CENTER;
+          cluster.billboard.disableDepthTestDistance =
+            Number.POSITIVE_INFINITY;
+
+          cluster.label.text = String(clusteredEntities.length);
+          cluster.label.font =
+            "700 14px 'Noto Sans KR', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+          cluster.label.fillColor = Cesium.Color.WHITE;
+          cluster.label.outlineColor = Cesium.Color.BLACK;
+          cluster.label.outlineWidth = 3;
+          cluster.label.style = Cesium.LabelStyle.FILL_AND_OUTLINE;
+          cluster.label.pixelOffset = new Cesium.Cartesian2(0, 0);
+          cluster.label.disableDepthTestDistance = Number.POSITIVE_INFINITY;
+          cluster.label.heightReference = Cesium.HeightReference.NONE;
+        }
+      );
 
       viewer.dataSources.add(ds);
       searchResultDsRef.current = ds;
     }
+
+    // === 카메라 높이에 따라 클러스터 강도/ON-OFF 조절 ===
+    const updateClusteringByCamera = () => {
+      if (!viewer || !ds) return;
+      const camera = viewer.scene.camera;
+      const carto = camera.positionCartographic;
+      const height = carto.height;
+
+      if (height > 200000) {
+
+        ds.clustering.enabled = true;
+        ds.clustering.pixelRange = 40;
+        ds.clustering.minimumClusterSize = 2;
+      } else if (height > 80000) {
+
+        ds.clustering.enabled = true;
+        ds.clustering.pixelRange = 25;
+        ds.clustering.minimumClusterSize = 2;
+      } else {
+        // 시/군·동 수준까지 내려오면: 클러스터 끔 → 개별 아이콘만
+        ds.clustering.enabled = false;
+      }
+    };
+
+    updateClusteringByCamera();
+    const onCameraChanged = () => updateClusteringByCamera();
+    viewer.camera.changed.addEventListener(onCameraChanged);
 
     ds.entities.removeAll();
 
@@ -267,17 +300,15 @@ export default function CesiumPage({
           width: 32,
           height: 32,
           verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-          // 지형 가림 방지
           heightReference: Cesium.HeightReference.NONE,
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
-        // 제목 라벨은 숨기고 심볼만 노출
         label: {
           show: false,
         },
+        name,
       });
 
-      // 원본 데이터 보존
       ent.properties = item;
     });
 
@@ -305,16 +336,71 @@ export default function CesiumPage({
         }
       }
     }
-    // 클릭 이벤트: 검색 결과 마커/클러스터 클릭 시 원본 item 전달
+
+    // === 클릭 이벤트: 클러스터/단일 분기 ===
     let removeClickHandler = null;
     if (onSearchResultClick) {
       const handler = viewer.screenSpaceEventHandler;
+
       const clickCallback = (movement) => {
         const picked = viewer.scene.pick(movement.position);
         if (!Cesium.defined(picked) || !picked.id) return;
+
         const ent = picked.id;
-        // search-results 데이터소스에 포함된 엔티티만 처리
-        if (!ds.entities.contains(ent)) return;
+
+        const isOriginalEntity = ds.entities.contains(ent);
+
+        const clusterMembers =
+          ent._clusteredEntities ||
+          ent.clusteredEntities ||
+          (ent.cluster && ent.cluster.clusteredEntities) ||
+          null;
+
+        if (clusterMembers && Array.isArray(clusterMembers) && clusterMembers.length > 1) {
+          const positions = clusterMembers
+            .map(
+              (ce) =>
+                ce.position &&
+                ce.position.getValue &&
+                ce.position.getValue(viewer.clock.currentTime)
+            )
+            .filter(Boolean);
+
+          if (positions.length > 0) {
+            const bs = Cesium.BoundingSphere.fromPoints(positions);
+            if (Cesium.defined(bs) && bs.radius > 0) {
+              const camera = viewer.camera;
+              viewer.camera.flyToBoundingSphere(bs, {
+                duration: 0.8,
+                offset: new Cesium.HeadingPitchRange(
+                  camera.heading,
+                  camera.pitch,
+                  bs.radius * 1.5
+                ),
+              });
+            }
+          }
+          return;
+        }
+
+        if (clusterMembers && Array.isArray(clusterMembers) && clusterMembers.length === 1) {
+          const single = clusterMembers[0];
+          if (!single) return;
+          const props = single.properties;
+          if (!props) return;
+          try {
+            const item =
+              typeof props.getValue === "function"
+                ? props.getValue(viewer.clock.currentTime)
+                : props;
+            onSearchResultClick(item);
+          } catch (e) {
+            console.warn("[search-results single-cluster click] props 읽기 실패:", e);
+          }
+          return;
+        }
+
+        if (!isOriginalEntity) return;
 
         const props = ent.properties;
         if (!props) return;
@@ -323,6 +409,7 @@ export default function CesiumPage({
             typeof props.getValue === "function"
               ? props.getValue(viewer.clock.currentTime)
               : props;
+
           onSearchResultClick(item);
         } catch (e) {
           console.warn("[search-results click] props 읽기 실패:", e);
@@ -337,6 +424,7 @@ export default function CesiumPage({
 
     return () => {
       if (removeClickHandler) removeClickHandler();
+      viewer.camera.changed.removeEventListener(onCameraChanged);
     };
   }, [searchResults, onSearchResultClick]);
 
@@ -348,7 +436,6 @@ export default function CesiumPage({
     if (!viewer || !flyToLocation) return;
 
     const [lon, lat] = flyToLocation;
-    // 포인트 기반 bounding sphere로 약간 여유 있는 높이로 이동
     const target = Cesium.Cartesian3.fromDegrees(lon, lat);
     const bs = new Cesium.BoundingSphere(target, 80); // 80m 반경
 
@@ -357,7 +444,7 @@ export default function CesiumPage({
       offset: new Cesium.HeadingPitchRange(
         0,
         Cesium.Math.toRadians(-60),
-        1200 // 약 1.2km 거리에서 내려다보는 뷰
+        1200
       ),
     });
   }, [flyToLocation]);
